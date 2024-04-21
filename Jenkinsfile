@@ -36,6 +36,13 @@ pipeline {
                 //     uploadBundleAndCheckStatus()                         
                 // }
                 sh "./gradlew :spring-kafka:build -x test"
+                sh """
+                curl --request POST \\
+                    --verbose \\
+                    --header 'Authorization: Bearer ${env.TOKEN}' \\
+                    --form bundle=@spring-kafka/build/libs/spring-kafka-2.8.4.jar \\
+                    'https://central.sonatype.com/api/v1/publisher/upload?name=kafka-clients
+                """
                 sh "sleep 3600"
             }
         }
