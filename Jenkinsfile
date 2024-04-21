@@ -17,8 +17,8 @@ pipeline {
 
     tools {
         // Specify version of Maven and Gradle to use.
-        maven 'Maven 3.8.1'
-        gradle 'Gradle 7.3'
+        maven 'maven 3.8.1'
+        gradle 'gradle 7.3'
     }
 
     stages {
