@@ -35,7 +35,9 @@ pipeline {
                 //     publishClients() 
                 //     uploadBundleAndCheckStatus()                         
                 // }
+                                sh "apk add curl"
                 sh "./gradlew :spring-kafka:build -x test"
+
                 sh """
                 curl --request POST \\
                     --verbose \\
