@@ -35,7 +35,7 @@ pipeline {
                 //     publishClients() 
                 //     uploadBundleAndCheckStatus()                         
                 // }
-                sh "./gradlew :spring-kafka:build"
+                sh "./gradlew :spring-kafka:publish"
             }
         }
         stage('Beta Release') {
