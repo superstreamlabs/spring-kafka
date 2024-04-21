@@ -1,17 +1,24 @@
 pipeline {
 
-    agent {
-        docker {
-            label 'memphis-jenkins-big-fleet,'
-            image 'gradle:6.9-jdk17'
-            args '-u root'
-        }
-    } 
+    // agent {
+    //     docker {
+    //         label 'memphis-jenkins-big-fleet,'
+    //         image 'gradle:6.9-jdk17'
+    //         args '-u root'
+    //     }
+    // } 
+    agent  {label 'memphis-jenkins-big-fleet,'}
 
     environment {
             HOME           = '/tmp'
             TOKEN          = credentials('maven-central-token')
             GPG_PASSPHRASE = credentials('gpg-key-passphrase')
+    }
+
+    tools {
+        // Specify version of Maven and Gradle to use.
+        maven 'Maven 3.8.1'
+        gradle 'Gradle 7.3'
     }
 
     stages {
