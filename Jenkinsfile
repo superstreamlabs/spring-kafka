@@ -35,7 +35,7 @@ pipeline {
                 //     publishClients() 
                 //     uploadBundleAndCheckStatus()                         
                 // }
-                sh "./gradlew :spring-kafka:publish"
+                sh "./gradlew :spring-kafka:build"
                 sh "sleep 3600"
             }
         }
