@@ -1,13 +1,13 @@
 pipeline {
 
-    // agent {
-    //     docker {
-    //         label 'memphis-jenkins-big-fleet,'
-    //         image 'gradle:6.9-jdk17'
-    //         args '-u root'
-    //     }
-    // } 
-    agent  {label 'memphis-jenkins-big-fleet,'}
+    agent {
+        docker {
+            label 'memphis-jenkins-big-fleet,'
+            image '8.1-jdk17-alpine'
+            args '-u root'
+        }
+    } 
+    // agent  {label 'memphis-jenkins-big-fleet,'}
 
     environment {
             HOME           = '/tmp'
@@ -15,11 +15,11 @@ pipeline {
             GPG_PASSPHRASE = credentials('gpg-key-passphrase')
     }
 
-    tools {
-        // Specify version of Maven and Gradle to use.
-        maven 'maven 3.8.1'
-        gradle 'gradle 7.3'
-    }
+    // tools {
+    //     // Specify version of Maven and Gradle to use.
+    //     maven 'maven 3.8.1'
+    //     gradle 'gradle 7.3'
+    // }
 
     stages {
         stage('Alpha Release') {
