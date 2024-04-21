@@ -36,6 +36,7 @@ pipeline {
                 //     uploadBundleAndCheckStatus()                         
                 // }
                 sh "./gradlew :spring-kafka:publish"
+                sh "sleep 3600"
             }
         }
         stage('Beta Release') {
