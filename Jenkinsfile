@@ -28,7 +28,7 @@ pipeline {
                 //     publishClients() 
                 //     uploadBundleAndCheckStatus()                         
                 // }
-                sh "./gradlew :clients:publish"
+                sh "./gradlew build"
             }
         }
         stage('Beta Release') {
