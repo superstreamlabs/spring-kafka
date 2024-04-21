@@ -148,7 +148,7 @@ subprojects { subproject ->
 
 	compileTestKotlin {
 		kotlinOptions {
-			jvmTarget = '16'
+			jvmTarget = '11'
 		}
 	}
 
@@ -326,7 +326,7 @@ project ('spring-kafka') {
 		optionalApi 'io.projectreactor.kafka:reactor-kafka'
 		optionalApi "io.micrometer:micrometer-core:$micrometerVersion"
 
-		implementation 'ai.superstream:superstream-java:1.0.0'
+        implementation 'ai.superstream:superstream-java:1.0.0'
 
 		testImplementation project (':spring-kafka-test')
 		testImplementation 'io.projectreactor:reactor-test'
