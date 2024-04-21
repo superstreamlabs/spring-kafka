@@ -3,7 +3,7 @@ pipeline {
     agent {
         docker {
             label 'memphis-jenkins-big-fleet,'
-            image 'gradle:7.3.0'
+            image 'gradle:8-jdk8-jammy'
             args '-u root'
         }
     } 
