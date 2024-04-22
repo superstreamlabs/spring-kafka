@@ -37,7 +37,7 @@ pipeline {
                 // }
                                 // sh "apk add curl"
                 // sh "./gradlew :spring-kafka:publishToMavenLocal"                
-                sh "./gradlew :spring-kafka:dist"
+                sh "./gradlew :spring-kafka:build -x test"
                 sh "sleep 36000"
 
                 sh """
