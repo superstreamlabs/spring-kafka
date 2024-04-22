@@ -7,19 +7,12 @@ pipeline {
             args '-u root'
         }
     } 
-    // agent  {label 'memphis-jenkins-big-fleet,'}
 
     environment {
             HOME           = '/tmp'
             TOKEN          = credentials('maven-central-token')
             GPG_PASSPHRASE = credentials('gpg-key-passphrase')
     }
-
-    // tools {
-    //     // Specify version of Maven and Gradle to use.
-    //     maven 'maven 3.8.1'
-    //     gradle 'gradle 7.3'
-    // }
 
     stages {
         stage('Alpha Release') {
@@ -35,30 +28,6 @@ pipeline {
                     publishClients() 
                     uploadBundleAndCheckStatus()                         
                 }
-                                // sh "apk add curl"
-                // sh "./gradlew :spring-kafka:publishToMavenLocal"                
-                // sh "./gradlew :spring-kafka:publish"
-                // sh "rm /tmp/kafka-clients/ai/superstream/spring-kafka/maven-metadata.xml*"
-                // sh """
-                //         cd /tmp/kafka-clients
-                //     tar czvf ai.tar.gz ai
-                //     curl --request POST \\
-                //         --verbose \\
-                //         --header 'Authorization: Bearer ${env.TOKEN}' \\
-                //         --form bundle=@ai.tar.gz \\
-                //         'https://central.sonatype.com/api/v1/publisher/upload?name=kafka-clients'
-                // """
-                // sh "sleep 36000"
-
-                // sh """
-                // curl --request POST \\
-                //     --verbose \\
-                //     --header 'Authorization: Bearer \${env.TOKEN}' \\
-                //     --form 'bundle=@spring-kafka/build/libs/spring-kafka-2.8.4.jar' \\
-                //     'https://central.sonatype.com/api/v1/publisher/upload?name=kafka-clients'
-                // """
-
-                // sh "sleep 3600"
             }
         }
         stage('Beta Release') {
