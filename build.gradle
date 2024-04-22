@@ -27,6 +27,7 @@ plugins {
 
 apply plugin: 'io.spring.nohttp'
 apply plugin: 'maven-publish'
+apply plugin: 'signing'
 
 def gitPresent = new File('.git').exists()
 
@@ -45,6 +46,7 @@ ext {
 	linkScmDevConnection = 'git@github.com:spring-projects/spring-kafka.git'
 	docResourcesVersion = '0.2.5'
     mavenUrl = project.hasProperty('mavenUrl') ? project.mavenUrl : ''
+	shouldSign = !skipSigning && !version.endsWith("SNAPSHOT")
 
 	if (gitPresent) {
 		modifiedFiles =
@@ -253,6 +255,10 @@ subprojects { subproject ->
 			}
 		}
 	}
+
+    signing {
+      sign publishing.publications.mavenJava
+    }
 
 	task updateCopyrights {
 		onlyIf { gitPresent && !System.getenv('GITHUB_ACTION') && !System.getenv('bamboo_buildKey') }
