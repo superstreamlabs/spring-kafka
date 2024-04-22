@@ -125,6 +125,7 @@ def setupGPG() {
             apt install -y gnupg
         """
         sh """
+            mkdir -p clients  # Ensure the directory exists
             echo '${env.GPG_PASSPHRASE}' | gpg --batch --yes --passphrase-fd 0 --import $GPG_KEY
             echo "allow-loopback-pinentry" > ~/.gnupg/gpg-agent.conf
             echo RELOADAGENT | gpg-connect-agent
