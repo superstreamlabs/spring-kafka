@@ -125,12 +125,11 @@ def setupGPG() {
             apt install -y gnupg
         """
         sh """
-            mkdir -p clients  # Ensure the directory exists
             echo '${env.GPG_PASSPHRASE}' | gpg --batch --yes --passphrase-fd 0 --import $GPG_KEY
             echo "allow-loopback-pinentry" > ~/.gnupg/gpg-agent.conf
             echo RELOADAGENT | gpg-connect-agent
             echo "D64C041FB68170463BE78AD7C4E3F1A8A5F0A659:6:" | gpg --import-ownertrust 
-            gpg --batch --pinentry-mode loopback --passphrase '${env.GPG_PASSPHRASE}' --export-secret-keys -o clients/secring.gpg
+            gpg --batch --pinentry-mode loopback --passphrase '${env.GPG_PASSPHRASE}' --export-secret-keys -o spring-kafka/secring.gpg
         """
     }
 }

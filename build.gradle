@@ -374,11 +374,6 @@ project ('spring-kafka') {
 		testImplementation "org.mockito:mockito-junit-jupiter:$mockitoVersion"
 		testImplementation "org.hibernate.validator:hibernate-validator:$hibernateValidationVersion"
 	}
-    // if (shouldSign) {
-    //   signing {
-    //     sign publishing.publications.mavenJava
-    //   }
-    // }	
 }
 
 project ('spring-kafka-test') {
