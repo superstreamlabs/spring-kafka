@@ -117,7 +117,6 @@ allprojects {
 subprojects { subproject ->
 	apply plugin: 'java-library'
 	apply plugin: 'java'
-	apply plugin: 'maven-publish'
 	apply from: "${rootProject.projectDir}/publish-maven.gradle"
 	apply plugin: 'eclipse'
 	apply plugin: 'idea'
@@ -224,7 +223,7 @@ subprojects { subproject ->
 				suppressAllPomMetadataWarnings()
 				groupId = 'ai.superstream'
 				artifactId = 'kafka-clients'
-				version = '0.0.1-alpa1'				
+				version = '1.0.0'				
 				from components.java
 				pom.withXml {
 					def pomDeps = asNode().dependencies.first()
@@ -241,17 +240,6 @@ subprojects { subproject ->
 			}
 		}
 	}
-	task writePom {
-		doLast {
-			pom {
-				project {
-					groupId 'ai.superstream'
-					artifactId 'kafka-clients'
-					version '0.0.1-alpha1'
-				}
-			}.writeTo("$buildDir/generatedPom/pom.xml")
-		}
-	}	
 
 	task updateCopyrights {
 		onlyIf { gitPresent && !System.getenv('GITHUB_ACTION') && !System.getenv('bamboo_buildKey') }
