@@ -246,6 +246,8 @@ subprojects { subproject ->
       }		
 		publications {
 			mavenJava(MavenPublication) {
+			  from components.java
+	
 				suppressAllPomMetadataWarnings()
 				pom.withXml {
 					// Check if dependencies node exists and create if not
