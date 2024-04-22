@@ -296,7 +296,7 @@ subprojects { subproject ->
 			expand(copyright: new Date().format('yyyy'), version: project.version)
 		}
 		from('.pom') {
-				into('META-INF/')
+				into('./')
 		}		
 	}
 
