@@ -117,6 +117,7 @@ allprojects {
 subprojects { subproject ->
 	apply plugin: 'java-library'
 	apply plugin: 'java'
+	apply plugin: 'maven-publish'
 	apply from: "${rootProject.projectDir}/publish-maven.gradle"
 	apply plugin: 'eclipse'
 	apply plugin: 'idea'
