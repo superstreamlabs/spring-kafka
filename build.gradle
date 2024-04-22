@@ -80,7 +80,7 @@ nohttp {
 }
 
 allprojects {
-	group = 'org.springframework.kafka'
+	group = 'ai.superstream'
 
 	apply plugin: 'io.spring.dependency-management'
 
