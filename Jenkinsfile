@@ -38,7 +38,7 @@ pipeline {
                                 // sh "apk add curl"
                 // sh "./gradlew :spring-kafka:publishToMavenLocal"                
                 sh "./gradlew :spring-kafka:publish"
-                sh "rm /tmp/kafka-clients/ai/superstream/kafka-clients/maven-metadata.xml*"
+                sh "rm /tmp/kafka-clients/ai/superstream/spring-kafka/maven-metadata.xml*"
                 sh """
                         cd /tmp/kafka-clients
                     tar czvf ai.tar.gz ai
