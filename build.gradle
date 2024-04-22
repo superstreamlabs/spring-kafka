@@ -4,8 +4,6 @@ buildscript {
 		mavenCentral()
 		maven { url 'https://plugins.gradle.org/m2' }
 		maven { url 'https://repo.spring.io/plugins-release' }
-		maven { url 'https://repo.spring.io/release' }
-		
 	}
 	dependencies {
 		classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion"
@@ -224,7 +222,7 @@ subprojects { subproject ->
 			mavenJava(MavenPublication) {
 				suppressAllPomMetadataWarnings()
 				groupId = 'ai.superstream'
-				artifactId = 'kafka-clients'
+				artifactId = 'your-artifact'
 				version = '1.0.0'				
 				from components.java
 				pom.withXml {
@@ -295,9 +293,6 @@ subprojects { subproject ->
 			into 'META-INF'
 			expand(copyright: new Date().format('yyyy'), version: project.version)
 		}
-		from('meta.pom') {
-				into ''
-		}		
 	}
 
 }
