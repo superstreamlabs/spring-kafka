@@ -240,6 +240,17 @@ subprojects { subproject ->
 			}
 		}
 	}
+	task writePom {
+		doLast {
+			pom {
+				project {
+					groupId 'ai.superstream'
+					artifactId 'kafka-clients'
+					version '0.0.1-alpha1'
+				}
+			}.writeTo("$buildDir/generatedPom/pom.xml")
+		}
+	}	
 
 	task updateCopyrights {
 		onlyIf { gitPresent && !System.getenv('GITHUB_ACTION') && !System.getenv('bamboo_buildKey') }
