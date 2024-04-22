@@ -26,6 +26,7 @@ plugins {
 }
 
 apply plugin: 'io.spring.nohttp'
+apply plugin: 'maven-publish'
 
 def gitPresent = new File('.git').exists()
 
