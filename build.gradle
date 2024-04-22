@@ -272,6 +272,7 @@ subprojects { subproject ->
     if (shouldSign) {
       signing {
         sign publishing.publications.mavenJava
+		useInMemoryPgpKeys(findProperty('signing.keyId'), findProperty('signing.secretKey'), System.getenv('GPG_KEY_PASSWORD'))
       }
     }
   }
