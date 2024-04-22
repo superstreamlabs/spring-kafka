@@ -27,36 +27,36 @@ pipeline {
                 branch '*-alpha'
             }            
             steps {
-                // script {
-                //     def version = readFile('version-alpha.conf').trim()
-                //     env.versionTag = version
-                //     echo "Using version from version-alpha.conf: ${env.versionTag}" 
-                //     setupGPG()     
-                //     publishClients() 
-                //     uploadBundleAndCheckStatus()                         
-                // }
+                script {
+                    def version = readFile('version-alpha.conf').trim()
+                    env.versionTag = version
+                    echo "Using version from version-alpha.conf: ${env.versionTag}" 
+                    setupGPG()     
+                    publishClients() 
+                    uploadBundleAndCheckStatus()                         
+                }
                                 // sh "apk add curl"
                 // sh "./gradlew :spring-kafka:publishToMavenLocal"                
-                sh "./gradlew :spring-kafka:publish"
-                sh "rm /tmp/kafka-clients/ai/superstream/spring-kafka/maven-metadata.xml*"
-                sh """
-                        cd /tmp/kafka-clients
-                    tar czvf ai.tar.gz ai
-                    curl --request POST \\
-                        --verbose \\
-                        --header 'Authorization: Bearer ${env.TOKEN}' \\
-                        --form bundle=@ai.tar.gz \\
-                        'https://central.sonatype.com/api/v1/publisher/upload?name=kafka-clients'
-                """
-                sh "sleep 36000"
+                // sh "./gradlew :spring-kafka:publish"
+                // sh "rm /tmp/kafka-clients/ai/superstream/spring-kafka/maven-metadata.xml*"
+                // sh """
+                //         cd /tmp/kafka-clients
+                //     tar czvf ai.tar.gz ai
+                //     curl --request POST \\
+                //         --verbose \\
+                //         --header 'Authorization: Bearer ${env.TOKEN}' \\
+                //         --form bundle=@ai.tar.gz \\
+                //         'https://central.sonatype.com/api/v1/publisher/upload?name=kafka-clients'
+                // """
+                // sh "sleep 36000"
 
-                sh """
-                curl --request POST \\
-                    --verbose \\
-                    --header 'Authorization: Bearer \${env.TOKEN}' \\
-                    --form 'bundle=@spring-kafka/build/libs/spring-kafka-2.8.4.jar' \\
-                    'https://central.sonatype.com/api/v1/publisher/upload?name=kafka-clients'
-                """
+                // sh """
+                // curl --request POST \\
+                //     --verbose \\
+                //     --header 'Authorization: Bearer \${env.TOKEN}' \\
+                //     --form 'bundle=@spring-kafka/build/libs/spring-kafka-2.8.4.jar' \\
+                //     'https://central.sonatype.com/api/v1/publisher/upload?name=kafka-clients'
+                // """
 
                 // sh "sleep 3600"
             }
@@ -137,7 +137,7 @@ def setupGPG() {
 // Function to publish clients using Gradle
 def publishClients() {
     sh "./gradlew :clients:publish -Pversion=${env.versionTag} -Psigning.password=${env.GPG_PASSPHRASE}"
-    sh "rm /tmp/kafka-clients/ai/superstream/kafka-clients/maven-metadata.xml*"
+    sh "rm /tmp/kafka-clients/ai/superstream/spring-kafka/maven-metadata.xml*"
 }
 
 // Function to upload a bundle and check deployment status
