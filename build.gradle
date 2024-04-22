@@ -294,16 +294,16 @@ subprojects { subproject ->
 			expand(copyright: new Date().format('yyyy'), version: project.version)
 		}
 
-		jar {
-			doFirst {
+
+		doFirst {
 				// Generates the .pom file to a specific location
-				def pomFile = "$buildDir/publications/mavenJava/pom-default.xml"
-				into('META-INF/maven/com.example/mylibrary/') {
-					from pomFile
-					rename('pom-default.xml', 'pom.xml')
-				}
+			def pomFile = "$buildDir/publications/mavenJava/pom-default.xml"
+			into('META-INF/maven/com.example/mylibrary/') {
+				from pomFile
+				rename('pom-default.xml', 'pom.xml')
 			}
 		}
+		
 	}
 
 }
