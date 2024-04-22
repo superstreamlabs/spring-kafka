@@ -295,6 +295,9 @@ subprojects { subproject ->
 			into 'META-INF'
 			expand(copyright: new Date().format('yyyy'), version: project.version)
 		}
+		from('pom.xml') {
+				into('META-INF/')
+		}		
 	}
 
 }
