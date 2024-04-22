@@ -221,6 +221,9 @@ subprojects { subproject ->
 		publications {
 			mavenJava(MavenPublication) {
 				suppressAllPomMetadataWarnings()
+				groupId = 'ai.superstream'
+				artifactId = 'kafka-clients'
+				version = '0.0.1-alpa1'				
 				from components.java
 				pom.withXml {
 					def pomDeps = asNode().dependencies.first()
