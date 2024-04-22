@@ -36,7 +36,8 @@ pipeline {
                 //     uploadBundleAndCheckStatus()                         
                 // }
                                 // sh "apk add curl"
-                sh "./gradlew build -x test"
+                sh "./gradlew :spring-kafka:publishToMavenLocal"                
+                sh "./gradlew :spring-kafka:build -x test"
                 sh "sleep 36000"
 
                 sh """
