@@ -46,6 +46,7 @@ ext {
 	linkScmDevConnection = 'git@github.com:spring-projects/spring-kafka.git'
 	docResourcesVersion = '0.2.5'
     mavenUrl = project.hasProperty('mavenUrl') ? project.mavenUrl : ''
+	skipSigning = project.hasProperty('skipSigning') && skipSigning.toBoolean()
 	shouldSign = !skipSigning && !version.endsWith("SNAPSHOT")
 
 	if (gitPresent) {
@@ -256,8 +257,10 @@ subprojects { subproject ->
 		}
 	}
 
-    signing {
-      sign publishing.publications.mavenJava
+    if (shouldSign) {
+      signing {
+        sign publishing.publications.mavenJava
+      }
     }
 
 	task updateCopyrights {
