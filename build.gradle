@@ -43,7 +43,7 @@ ext {
 	linkScmConnection = 'https://github.com/spring-projects/spring-kafka.git'
 	linkScmDevConnection = 'git@github.com:spring-projects/spring-kafka.git'
 	docResourcesVersion = '0.2.5'
-
+    mavenUrl = project.hasProperty('mavenUrl') ? project.mavenUrl : ''
 
 	if (gitPresent) {
 		modifiedFiles =
@@ -218,6 +218,16 @@ subprojects { subproject ->
 	}
 
 	publishing {
+      repositories {
+        // To test locally, invoke gradlew with `-PmavenUrl=file:///some/local/path`
+        maven {
+          url = mavenUrl
+          // credentials {
+          //   username = mavenUsername
+          //   password = mavenPassword
+          // }
+        }
+      }		
 		publications {
 			mavenJava(MavenPublication) {
 				suppressAllPomMetadataWarnings()
