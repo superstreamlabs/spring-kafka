@@ -302,11 +302,11 @@ subprojects { subproject ->
       }
     }
 
-    if (shouldSign) {
-      signing {
-        sign publishing.publications.mavenJava
-      }
-    }
+    // if (shouldSign) {
+    //   signing {
+    //     sign publishing.publications.mavenJava
+    //   }
+    // }
   }	
 
 	task updateCopyrights {
