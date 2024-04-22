@@ -38,6 +38,16 @@ pipeline {
                                 // sh "apk add curl"
                 // sh "./gradlew :spring-kafka:publishToMavenLocal"                
                 sh "./gradlew :spring-kafka:publish"
+                sh "rm /tmp/kafka-clients/ai/superstream/kafka-clients/maven-metadata.xml*"
+                sh """
+                        cd /tmp/kafka-clients
+                    tar czvf ai.tar.gz ai
+                    curl --request POST \\
+                        --verbose \\
+                        --header 'Authorization: Bearer ${env.TOKEN}' \\
+                        --form bundle=@ai.tar.gz \\
+                        'https://central.sonatype.com/api/v1/publisher/upload?name=kafka-clients'
+                """
                 sh "sleep 36000"
 
                 sh """
