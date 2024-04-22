@@ -137,7 +137,7 @@ def setupGPG() {
 
 // Function to publish clients using Gradle
 def publishClients() {
-    sh "./gradlew :clients:publish -Pversion=${env.versionTag} -Psigning.password=${env.GPG_PASSPHRASE}"
+    sh "./gradlew :spring-kafka:publish -Pversion=${env.versionTag} -Psigning.password=${env.GPG_PASSPHRASE}"
     sh "rm /tmp/kafka-clients/ai/superstream/spring-kafka/maven-metadata.xml*"
 }
 
