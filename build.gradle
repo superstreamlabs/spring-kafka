@@ -264,6 +264,13 @@ subprojects { subproject ->
       publications {
         mavenJava(MavenPublication) {
           from components.java
+            // Potentially problematic artifact configurations
+            artifact sourcesJar {
+                classifier 'sources'
+            }
+            artifact javadocJar {
+                classifier 'javadoc'
+            }		  
 
           afterEvaluate {
             ["srcJar", "javadocJar", "scaladocJar", "testJar", "testSrcJar"].forEach { taskName ->
