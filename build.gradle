@@ -221,10 +221,6 @@ subprojects { subproject ->
 		publications {
 			mavenJava(MavenPublication) {
 				suppressAllPomMetadataWarnings()
-				groupId = 'ai.superstream'
-				artifactId = 'your-artifact'
-				version = '1.0.0'				
-				from components.java
 				pom.withXml {
 					def pomDeps = asNode().dependencies.first()
 					subproject.configurations.providedImplementation.allDependencies.each { dep ->

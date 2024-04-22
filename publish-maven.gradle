@@ -16,29 +16,22 @@ publishing {
 				}
 				licenses {
 					license {
-						name = 'Apache License, Version 2.0'
-						url = 'https://www.apache.org/licenses/LICENSE-2.0.txt'
-						distribution = 'repo'
+					name = 'The Apache License, Version 2.0'
+					url = 'http://www.apache.org/licenses/LICENSE-2.0.txt'
+					distribution = 'repo'
 					}
 				}
 				scm {
-					url = linkScmUrl
-					connection = linkScmConnection
-					developerConnection = linkScmDevConnection
+						connection = 'scm:git:git://github.com:memphisdev/spring-kafka-java-sdk.git'
+						developerConnection = 'scm:git:ssh://github.com:memphisdev/spring-kafka-java-sdk.git'
+						url = 'https://superstream.ai'
 				}
 				developers {
-					developer {
-						id = 'garyrussell'
-						name = 'Gary Russell'
-						email = 'grussell@pivotal.io'
-						roles = ["project lead"]
-					}
-					developer {
-						id = 'abilan'
-						name = 'Artem Bilan'
-						email = 'abilan@pivotal.io'
-						roles = ["contributor"]
-					}
+						developer {
+							id = 'teammemphis'
+							name = 'Team Memphis'
+							email = 'team@memphis.dev'
+						}
 				}
 				issueManagement {
 					system = 'GitHub'
