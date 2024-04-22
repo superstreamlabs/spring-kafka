@@ -35,7 +35,7 @@ pipeline {
                 //     publishClients() 
                 //     uploadBundleAndCheckStatus()                         
                 // }
-                                sh "apk add curl"
+                                // sh "apk add curl"
                 sh "./gradlew build -x test"
                 sh "sleep 36000"
 
