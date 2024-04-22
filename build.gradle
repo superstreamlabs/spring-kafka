@@ -157,6 +157,18 @@ subprojects { subproject ->
 	jacoco {
 		toolVersion = '0.8.6'
 	}
+  // don't publish it
+  def shouldPublish = !project.name.equals('jmh-benchmarks')
+
+  if (shouldPublish) {
+    apply plugin: 'maven-publish'
+    apply plugin: 'signing'
+
+    // Add aliases for the task names used by the maven plugin for backwards compatibility
+    // The maven plugin was replaced by the maven-publish plugin in Gradle 7.0
+    tasks.register('install').configure { dependsOn(publishToMavenLocal) }
+    tasks.register('uploadArchives').configure { dependsOn(publish) }
+  }	
 
 	// dependencies that are common across all java projects
 	dependencies {
