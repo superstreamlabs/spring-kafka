@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2022 the original author or authors.
+ * Copyright 2018-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import java.lang.reflect.Type;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -36,13 +37,12 @@ import org.springframework.util.ClassUtils;
  * Utility methods.
  *
  * @author Gary Russell
+ * @author Wang ZhiYang
  *
  * @since 2.2
  *
  */
 public final class KafkaUtils {
-
-	private static final ThreadLocal<Boolean> LOG_METADATA_ONLY = new ThreadLocal<>();
 
 	private static Function<ProducerRecord<?, ?>, String> prFormatter = ProducerRecord::toString;
 
@@ -55,7 +55,7 @@ public final class KafkaUtils {
 	public static final boolean MICROMETER_PRESENT = ClassUtils.isPresent(
 			"io.micrometer.core.instrument.MeterRegistry", KafkaUtils.class.getClassLoader());
 
-	private static final ThreadLocal<String> GROUP_IDS = new ThreadLocal<>();
+	private static final Map<Thread, String> GROUP_IDS = new ConcurrentHashMap<>();
 
 	/**
 	 * Return true if the method return type is {@link Message} or
@@ -65,26 +65,16 @@ public final class KafkaUtils {
 	 */
 	public static boolean returnTypeMessageOrCollectionOf(Method method) {
 		Type returnType = method.getGenericReturnType();
-		if (returnType.equals(Message.class)) {
-			return true;
-		}
-		if (returnType instanceof ParameterizedType) {
-			ParameterizedType prt = (ParameterizedType) returnType;
-			Type rawType = prt.getRawType();
-			if (rawType.equals(Message.class)) {
-				return true;
+		if (returnType instanceof ParameterizedType prt) {
+			returnType = prt.getRawType();
+			if (Collection.class.equals(returnType)) {
+				returnType = prt.getActualTypeArguments()[0];
 			}
-			if (rawType.equals(Collection.class)) {
-				Type collectionType = prt.getActualTypeArguments()[0];
-				if (collectionType.equals(Message.class)) {
-					return true;
-				}
-				return collectionType instanceof ParameterizedType
-						&& ((ParameterizedType) collectionType).getRawType().equals(Message.class);
+			if (returnType instanceof ParameterizedType pType) {
+				returnType = pType.getRawType();
 			}
 		}
-		return false;
-
+		return Message.class.equals(returnType);
 	}
 
 	/**
@@ -93,7 +83,9 @@ public final class KafkaUtils {
 	 * @since 2.3
 	 */
 	public static void setConsumerGroupId(String groupId) {
-		KafkaUtils.GROUP_IDS.set(groupId);
+		if (groupId != null) {
+			KafkaUtils.GROUP_IDS.put(Thread.currentThread(), groupId);
+		}
 	}
 
 	/**
@@ -102,7 +94,7 @@ public final class KafkaUtils {
 	 * @since 2.3
 	 */
 	public static String getConsumerGroupId() {
-		return KafkaUtils.GROUP_IDS.get();
+		return KafkaUtils.GROUP_IDS.get(Thread.currentThread());
 	}
 
 	/**
@@ -110,7 +102,7 @@ public final class KafkaUtils {
 	 * @since 2.3
 	 */
 	public static void clearConsumerGroupId() {
-		KafkaUtils.GROUP_IDS.remove();
+		KafkaUtils.GROUP_IDS.remove(Thread.currentThread());
 	}
 
 	/**
@@ -129,12 +121,12 @@ public final class KafkaUtils {
 	 */
 	public static Duration determineSendTimeout(Map<String, Object> producerProps, long buffer, long min) {
 		Object dt = producerProps.get(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG);
-		if (dt instanceof Number) {
-			return Duration.ofMillis(Math.max(((Number) dt).longValue() + buffer, min));
+		if (dt instanceof Number number) {
+			return Duration.ofMillis(Math.max(number.longValue() + buffer, min));
 		}
-		else if (dt instanceof String) {
+		else if (dt instanceof String str) {
 			try {
-				return Duration.ofMillis(Math.max(Long.parseLong((String) dt) + buffer, min));
+				return Duration.ofMillis(Math.max(Long.parseLong(str) + buffer, min));
 			}
 			catch (@SuppressWarnings("unused") NumberFormatException ex) {
 			}
@@ -149,10 +141,10 @@ public final class KafkaUtils {
 	 * Set to true to only log record metadata.
 	 * @param onlyMeta true to only log record metadata.
 	 * @since 2.7.12
-	 * @see #recordToString(ConsumerRecord)
+	 * @deprecated - no longer used.
 	 */
+	@Deprecated(since = "3.1", forRemoval = true) // 3.2
 	public static void setLogOnlyMetadata(boolean onlyMeta) {
-		LOG_METADATA_ONLY.set(onlyMeta);
 	}
 
 	/**

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2022 the original author or authors.
+ * Copyright 2016-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,9 +23,11 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 
 import org.aopalliance.aop.Advice;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import org.springframework.aop.framework.Advised;
 import org.springframework.aop.framework.ProxyFactory;
@@ -175,9 +177,16 @@ public class ContainerProperties extends ConsumerProperties {
 
 	private static final double DEFAULT_IDLE_BEFORE_DATA_MULTIPLIER = 5.0;
 
+	private static final long ONE_HUNDRED = 100L;
+
+	private static final Duration DEFAULT_PAUSED_POLL_TIMEOUT = Duration.ofMillis(ONE_HUNDRED);
+
 	private final Map<String, String> micrometerTags = new HashMap<>();
 
 	private final List<Advice> adviceChain = new ArrayList<>();
+
+	@Nullable
+	private Function<ConsumerRecord<?, ?>, Map<String, String>> micrometerTagsProvider;
 
 	/**
 	 * The ack mode to use when auto ack (in the configuration properties) is false.
@@ -188,7 +197,7 @@ public class ContainerProperties extends ConsumerProperties {
 	 * when they all have been processed by the listener</li>
 	 * <li>TIME: Commit pending offsets after {@link #setAckTime(long) ackTime} number of
 	 * milliseconds; (should be greater than
-	 * {@code #setPollTimeout(long) pollTimeout}.</li>
+	 * {@code ConsumerProperties#setPollTimeout(long) pollTimeout}.</li>
 	 * <li>COUNT: Commit pending offsets after at least {@link #setAckCount(int) ackCount}
 	 * number of records have been processed</li>
 	 * <li>COUNT_TIME: Commit pending offsets after {@link #setAckTime(long) ackTime}
@@ -198,7 +207,7 @@ public class ContainerProperties extends ConsumerProperties {
 	 * {@link org.springframework.kafka.listener.AcknowledgingMessageListener}. Acks will
 	 * be queued and offsets will be committed when all the records returned by the
 	 * previous poll have been processed by the listener.</li>
-	 * <li>MANUAL_IMMDEDIATE: Listener is responsible for acking - use a
+	 * <li>MANUAL_IMMEDIATE: Listener is responsible for acking - use a
 	 * {@link org.springframework.kafka.listener.AcknowledgingMessageListener}. The commit
 	 * will be performed immediately if the {@code Acknowledgment} is acknowledged on the
 	 * calling consumer thread. Otherwise, the acks will be queued and offsets will be
@@ -219,7 +228,7 @@ public class ContainerProperties extends ConsumerProperties {
 	/**
 	 * The time (ms) after which outstanding offsets should be committed when
 	 * {@link AckMode#TIME} or {@link AckMode#COUNT_TIME} is being used. Should be
-	 * larger than
+	 * larger than zero.
 	 */
 	private long ackTime = DEFAULT_ACK_TIME;
 
@@ -287,6 +296,10 @@ public class ContainerProperties extends ConsumerProperties {
 
 	private KafkaListenerObservationConvention observationConvention;
 
+	private Duration pollTimeoutWhilePaused = DEFAULT_PAUSED_POLL_TIMEOUT;
+
+	private boolean restartAfterAuthExceptions;
+
 	/**
 	 * Create properties for a container that will subscribe to the specified topics.
 	 * @param topics the topics.
@@ -336,7 +349,7 @@ public class ContainerProperties extends ConsumerProperties {
 	 * when they all have been processed by the listener</li>
 	 * <li>TIME: Commit pending offsets after {@link #setAckTime(long) ackTime} number of
 	 * milliseconds; (should be greater than
-	 * {@code #setPollTimeout(long) pollTimeout}.</li>
+	 * {@code ConsumerProperties#setPollTimeout(long) pollTimeout}.</li>
 	 * <li>COUNT: Commit pending offsets after at least {@link #setAckCount(int) ackCount}
 	 * number of records have been processed</li>
 	 * <li>COUNT_TIME: Commit pending offsets after {@link #setAckTime(long) ackTime}
@@ -346,7 +359,7 @@ public class ContainerProperties extends ConsumerProperties {
 	 * {@link org.springframework.kafka.listener.AcknowledgingMessageListener}. Acks will
 	 * be queued and offsets will be committed when all the records returned by the
 	 * previous poll have been processed by the listener.</li>
-	 * <li>MANUAL_IMMDEDIATE: Listener is responsible for acking - use a
+	 * <li>MANUAL_IMMEDIATE: Listener is responsible for acking - use a
 	 * {@link org.springframework.kafka.listener.AcknowledgingMessageListener}. The commit
 	 * will be performed immediately if the {@code Acknowledgment} is acknowledged on the
 	 * calling consumer thread. Otherwise, the acks will be queued and offsets will be
@@ -375,7 +388,7 @@ public class ContainerProperties extends ConsumerProperties {
 	/**
 	 * Set the time (ms) after which outstanding offsets should be committed when
 	 * {@link AckMode#TIME} or {@link AckMode#COUNT_TIME} is being used. Should be
-	 * larger than
+	 * larger than zero.
 	 * @param ackTime the time
 	 */
 	public void setAckTime(long ackTime) {
@@ -568,11 +581,10 @@ public class ContainerProperties extends ConsumerProperties {
 	}
 
 	/**
-	 * If the time since the last poll / {@link #getPollTimeout() poll timeout}
-	 * exceeds this value, a NonResponsiveConsumerEvent is published.
-	 * This value should be more than 1.0 to avoid a race condition that can cause
-	 * spurious events to be published.
-	 * Default {@value #DEFAULT_NO_POLL_THRESHOLD}.
+	 * If the time since the last poll / {@link ConsumerProperties#getPollTimeout() poll
+	 * timeout} exceeds this value, a NonResponsiveConsumerEvent is published. This value
+	 * should be more than 1.0 to avoid a race condition that can cause spurious events to
+	 * be published. Default {@value #DEFAULT_NO_POLL_THRESHOLD}.
 	 * @param noPollThreshold the threshold
 	 * @since 1.3.1
 	 */
@@ -653,7 +665,8 @@ public class ContainerProperties extends ConsumerProperties {
 	}
 
 	/**
-	 * Set to true to enable observation via Micrometer.
+	 * Set to true to enable observation via Micrometer. When false (default)
+	 * basic Micrometer timers are used instead (when enabled).
 	 * @param observationEnabled true to enable.
 	 * @since 3.0
 	 * @see #setMicrometerEnabled(boolean)
@@ -673,8 +686,40 @@ public class ContainerProperties extends ConsumerProperties {
 		}
 	}
 
+	/**
+	 * Return static Micrometer tags.
+	 * @return the tags.
+	 * @since 2.3
+	 */
 	public Map<String, String> getMicrometerTags() {
 		return Collections.unmodifiableMap(this.micrometerTags);
+	}
+
+	/**
+	 * Set a function to provide dynamic tags based on the consumer record. These tags
+	 * will be added to any static tags provided in {@link #setMicrometerTags(Map)
+	 * micrometerTags}. Only applies to record listeners, ignored for batch listeners.
+	 * Does not apply if observation is enabled.
+	 * @param micrometerTagsProvider the micrometerTagsProvider.
+	 * @since 2.9.8
+	 * @see #setMicrometerEnabled(boolean)
+	 * @see #setMicrometerTags(Map)
+	 * @see #setObservationEnabled(boolean)
+	 */
+	public void setMicrometerTagsProvider(
+			@Nullable Function<ConsumerRecord<?, ?>, Map<String, String>> micrometerTagsProvider) {
+
+		this.micrometerTagsProvider = micrometerTagsProvider;
+	}
+
+	/**
+	 * Return the Micrometer tags provider.
+	 * @return the micrometerTagsProvider.
+	 * @since 2.9.8
+	 */
+	@Nullable
+	public Function<ConsumerRecord<?, ?>, Map<String, String>> getMicrometerTagsProvider() {
+		return this.micrometerTagsProvider;
 	}
 
 	public Duration getConsumerStartTimeout() {
@@ -945,6 +990,47 @@ public class ContainerProperties extends ConsumerProperties {
 		this.observationConvention = observationConvention;
 	}
 
+	/**
+	 * The poll timeout to use while paused; usually a lower number than
+	 * {@link ConsumerProperties#setPollTimeout(long) pollTimeout}.
+	 * @return the pollTimeoutWhilePaused
+	 * @since 2.9.7
+	 */
+	public Duration getPollTimeoutWhilePaused() {
+		return this.pollTimeoutWhilePaused;
+	}
+
+	/**
+	 * Set the poll timeout to use while paused; usually a lower number than
+	 * {@link ConsumerProperties#setPollTimeout(long) pollTimeout}. Should be greater than
+	 * zero to avoid a tight CPU loop while the consumer is paused. Default is 100ms.
+	 * @param pollTimeoutWhilePaused the pollTimeoutWhilePaused to set
+	 * @since 2.9.7
+	 */
+	public void setPollTimeoutWhilePaused(Duration pollTimeoutWhilePaused) {
+		Assert.notNull(pollTimeoutWhilePaused, "'pollTimeoutWhilePaused' cannot be null");
+		this.pollTimeoutWhilePaused = pollTimeoutWhilePaused;
+	}
+
+	/**
+	 * Restart the container if stopped due to an auth exception.
+	 * @return the restartAfterAuthExceptions
+	 * @since 2.9.7
+	 */
+	public boolean isRestartAfterAuthExceptions() {
+		return this.restartAfterAuthExceptions;
+	}
+
+	/**
+	 * Set to true to automatically restart the container if an auth exception is
+	 * detected by the container (or all child containers).
+	 * @param restartAfterAuthExceptions true to restart.
+	 * @since 2.9.7
+	 */
+	public void setRestartAfterAuthExceptions(boolean restartAfterAuthExceptions) {
+		this.restartAfterAuthExceptions = restartAfterAuthExceptions;
+	}
+
 	@Override
 	public String toString() {
 		return "ContainerProperties ["
@@ -967,6 +1053,7 @@ public class ContainerProperties extends ConsumerProperties {
 				+ "\n monitorInterval=" + this.monitorInterval
 				+ (this.scheduler != null ? "\n scheduler=" + this.scheduler : "")
 				+ "\n noPollThreshold=" + this.noPollThreshold
+				+ "\n pollTimeoutWhilePaused=" + this.pollTimeoutWhilePaused
 				+ "\n subBatchPerPartition=" + this.subBatchPerPartition
 				+ "\n assignmentCommitOption=" + this.assignmentCommitOption
 				+ "\n deliveryAttemptHeader=" + this.deliveryAttemptHeader
@@ -981,6 +1068,7 @@ public class ContainerProperties extends ConsumerProperties {
 				+ (this.observationConvention != null
 						? "\n observationConvention=" + this.observationConvention
 						: "")
+				+ "\n restartAfterAuthExceptions=" + this.restartAfterAuthExceptions
 				+ "\n]";
 	}
 

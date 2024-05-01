@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 the original author or authors.
+ * Copyright 2021-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,7 +37,6 @@ import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.listener.BatchListenerFailedException;
 import org.springframework.kafka.listener.ListenerExecutionFailedException;
-import org.springframework.kafka.listener.ListenerUtils;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.kafka.support.converter.BatchMessagingMessageConverter;
 import org.springframework.kafka.support.converter.ConversionException;
@@ -74,7 +73,7 @@ public class BatchAdapterConversionErrorsTests {
 				.extracting("index")
 				.isEqualTo(1);
 		assertThat(listener.values).containsExactly(new Foo("baz"), null, new Foo("qux"));
-		DeserializationException vDeserEx = ListenerUtils.getExceptionFromHeader(junkRecord,
+		DeserializationException vDeserEx = SerializationUtils.getExceptionFromHeader(junkRecord,
 				SerializationUtils.VALUE_DESERIALIZER_EXCEPTION_HEADER, null);
 		assertThat(vDeserEx).isNotNull();
 		assertThat(vDeserEx.getData()).isEqualTo("JUNK".getBytes());
@@ -165,7 +164,7 @@ public class BatchAdapterConversionErrorsTests {
 		public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory() {
 			ConcurrentKafkaListenerContainerFactory factory = new ConcurrentKafkaListenerContainerFactory();
 			factory.setConsumerFactory(consumerFactory());
-			factory.setMessageConverter(new BatchMessagingMessageConverter(new JsonMessageConverter()));
+			factory.setBatchMessageConverter(new BatchMessagingMessageConverter(new JsonMessageConverter()));
 			factory.setBatchListener(true);
 			return factory;
 		}

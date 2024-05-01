@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2022 the original author or authors.
+ * Copyright 2018-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,16 +34,18 @@ import org.springframework.kafka.config.KafkaListenerContainerFactory;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistrar;
 import org.springframework.kafka.config.MethodKafkaListenerEndpoint;
 import org.springframework.kafka.config.MultiMethodKafkaListenerEndpoint;
+import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.kafka.support.EndpointHandlerMethod;
 import org.springframework.kafka.support.KafkaUtils;
 import org.springframework.kafka.support.TopicForRetryable;
+import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 
 
 /**
  *
  * <p>Configures main, retry and DLT topics based on a main endpoint and provided
- * configurations to acomplish a distributed retry / DLT pattern in a non-blocking
+ * configurations to accomplish a distributed retry / DLT pattern in a non-blocking
  * fashion, at the expense of ordering guarantees.
  *
  * <p>To illustrate, if you have a "main-topic" topic, and want an exponential backoff
@@ -63,7 +65,7 @@ import org.springframework.lang.Nullable;
  * {@link org.springframework.kafka.retrytopic.DestinationTopicResolver}
  * to know the next topic and the delay for it.
  *
- * <p>Each forwareded record has a back off timestamp header and, if consumption is
+ * <p>Each forwarded record has a back off timestamp header and, if consumption is
  * attempted by the {@link org.springframework.kafka.listener.adapter.KafkaBackoffAwareMessageListenerAdapter}
  * before that time, the partition consumption is paused by a
  * {@link org.springframework.kafka.listener.KafkaConsumerBackoffManager} and a
@@ -178,7 +180,7 @@ import org.springframework.lang.Nullable;
  *     public RetryTopicConfiguration otherRetryTopic(KafkaTemplate&lt;Integer, MyPojo&gt; template) {
  *         return RetryTopicConfigurationBuilder
  *                 .newInstance()
- *                 .dltProcessor(MyCustomDltProcessor.class, "processDltMessage")
+ *                 .dltHandlerMethod("myCustomDltProcessor", "processDltMessage")
  *                 .create(template);
  *     }</code>
  *
@@ -237,26 +239,6 @@ public class RetryTopicConfigurer implements BeanFactoryAware {
 	private BeanFactory beanFactory;
 
 	private final RetryTopicNamesProviderFactory retryTopicNamesProviderFactory;
-
-	/**
-	 * Create an instance with the provided properties.
-	 * @param destinationTopicProcessor the destination topic processor.
-	 * @param containerFactoryResolver the container factory resolver.
-	 * @param listenerContainerFactoryConfigurer the container factory configurer.
-	 * @param beanFactory the bean factory.
-	 * @param retryTopicNamesProviderFactory the retry topic names factory.
-	 */
-	@Deprecated(since = "2.9", forRemoval = true) // in 3.1
-	public RetryTopicConfigurer(DestinationTopicProcessor destinationTopicProcessor,
-								ListenerContainerFactoryResolver containerFactoryResolver,
-								ListenerContainerFactoryConfigurer listenerContainerFactoryConfigurer,
-								BeanFactory beanFactory,
-								RetryTopicNamesProviderFactory retryTopicNamesProviderFactory) {
-
-		this(destinationTopicProcessor, containerFactoryResolver,
-				listenerContainerFactoryConfigurer, retryTopicNamesProviderFactory);
-		this.beanFactory = beanFactory;
-	}
 
 	/**
 	 * Create an instance with the provided properties.
@@ -468,7 +450,7 @@ public class RetryTopicConfigurer implements BeanFactoryAware {
 
 		public static final String DEFAULT_DLT_METHOD_NAME = "logMessage";
 
-		public void logMessage(Object message) {
+		public void logMessage(Object message, @NonNull Acknowledgment ack) {
 			if (message instanceof ConsumerRecord) {
 				LOGGER.info(() -> "Received message in dlt listener: "
 						+ KafkaUtils.format((ConsumerRecord<?, ?>) message));
@@ -476,7 +458,9 @@ public class RetryTopicConfigurer implements BeanFactoryAware {
 			else {
 				LOGGER.info(() -> "Received message in dlt listener.");
 			}
+			ack.acknowledge();
 		}
+
 	}
 
 }

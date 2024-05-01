@@ -17,64 +17,60 @@
 package org.springframework.kafka.support.serializer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
-import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.retry.RecoveryCallback;
+import org.springframework.retry.RetryContext;
 import org.springframework.retry.support.RetryTemplate;
 
 /**
  * @author Gary Russell
- * @since 2.3
+ * @author Wang Zhiyang
+ * @author Soby Chacko
+ * @author Artem Bilan
  *
+ * @since 2.3
  */
-public class RetryingDeserializerTests {
+class RetryingDeserializerTests {
 
 	@Test
-	void testRetry() {
-		Deser delegate = new Deser();
+	void basicRetryingDeserializer() {
+		AtomicInteger n = new AtomicInteger();
+		Deserializer<String> delegate =
+				(topic, data) -> {
+					if (n.incrementAndGet() < 3) {
+						throw new RuntimeException();
+					}
+					return new String(data);
+				};
+
 		RetryingDeserializer<String> rdes = new RetryingDeserializer<>(delegate, new RetryTemplate());
 		assertThat(rdes.deserialize("foo", "bar".getBytes())).isEqualTo("bar");
-		assertThat(delegate.n).isEqualTo(3);
-		delegate.n = 0;
+		assertThat(n.get()).isEqualTo(3);
+		n.set(0);
 		assertThat(rdes.deserialize("foo", new RecordHeaders(), "bar".getBytes())).isEqualTo("bar");
-		assertThat(delegate.n).isEqualTo(3);
-		rdes.close();
+		assertThat(n.get()).isEqualTo(3);
 	}
 
-	public static class Deser implements Deserializer<String> {
-
-		int n;
-
-		@Override
-		public void configure(Map<String, ?> configs, boolean isKey) {
-		}
-
-		@Override
-		public String deserialize(String topic, byte[] data) {
-			if (n++ < 2) {
-				throw new RuntimeException();
-			}
-			return new String(data);
-		}
-
-		@Override
-		public String deserialize(String topic, Headers headers, byte[] data) {
-			if (n++ < 2) {
-				throw new RuntimeException();
-			}
-			return new String(data);
-		}
-
-		@Override
-		public void close() {
-			// empty
-		}
-
+	@Test
+	void retryingDeserializerWithRecoveryCallback() throws Exception {
+		RetryingDeserializer<String> rdes =
+				new RetryingDeserializer<>(
+						(s, b) -> {
+							throw new RuntimeException();
+						}, new RetryTemplate());
+		RecoveryCallback<String> recoveryCallback = mock();
+		rdes.setRecoveryCallback(recoveryCallback);
+		rdes.deserialize("my-topic", "my-data".getBytes());
+		verify(recoveryCallback).recover(any(RetryContext.class));
 	}
 
 }

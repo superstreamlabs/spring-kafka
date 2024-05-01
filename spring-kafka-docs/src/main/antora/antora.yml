@@ -1,0 +1,27 @@
+name: kafka
+version: true
+title: Spring for Apache Kafka
+nav:
+  - modules/ROOT/nav.adoc
+ext:
+  collector:
+    run:
+      # FIXME Change "command" to the command that generates your antora.yml and other antora resources
+      # See https://gitlab.com/antora/antora-collector-extension/-/blob/main/docs/modules/ROOT/pages/configuration-keys.adoc?ref_type=heads#collector-reference
+      # HINT: Maven is typically something like:
+      # ./mvnw validate process-resources -am -Pantora-process-resources
+      command: gradlew :spring-kafka-docs:generateAntoraResources
+      local: true
+    scan:
+      # FIXME Change "dir" to the location that generated files are at
+      # See https://gitlab.com/antora/antora-collector-extension/-/blob/main/docs/modules/ROOT/pages/configuration-keys.adoc?ref_type=heads#collector-reference
+      # HINT: Maven is typically something like:
+      # target/classes/antora-resources/
+      dir: spring-kafka-docs/build/generated-antora-resources
+
+asciidoc:
+  attributes:
+    attribute-missing: 'warn'
+    chomp: 'all'
+    java-examples: example$java-examples/org/springframework/kafka/jdocs
+    kotlin-examples: example$kotlin-examples/org/springframework/kafka/kdocs

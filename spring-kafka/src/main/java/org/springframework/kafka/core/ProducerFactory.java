@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2022 the original author or authors.
+ * Copyright 2016-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,7 +56,7 @@ public interface ProducerFactory<K, V> {
 	 * @return the producer.
 	 * @since 2.3
 	 */
-	default Producer<K, V> createProducer(@SuppressWarnings("unused") String txIdPrefix) {
+	default Producer<K, V> createProducer(@Nullable @SuppressWarnings("unused") String txIdPrefix) {
 		throw new UnsupportedOperationException("This factory does not support this method");
 	}
 
@@ -75,29 +75,6 @@ public interface ProducerFactory<K, V> {
 	 * @return true if transactional.
 	 */
 	default boolean transactionCapable() {
-		return false;
-	}
-
-	/**
-	 * Remove the specified producer from the cache and close it.
-	 * @param transactionIdSuffix the producer's transaction id suffix.
-	 * @since 1.3.8
-	 * @deprecated - no longer needed.
-	 */
-	@Deprecated(since = "3.0", forRemoval = true) // in 3.1
-	default void closeProducerFor(String transactionIdSuffix) {
-	}
-
-	/**
-	 * Return the producerPerConsumerPartition.
-	 * @return the producerPerConsumerPartition.
-	 * @since 1.3.8
-	 * @deprecated no longer necessary because
-	 * {@code org.springframework.kafka.listener.ContainerProperties.EOSMode#V1} is no
-	 * longer supported.
-	 */
-	@Deprecated(since = "3.0", forRemoval = true) // in 3.1
-	default boolean isProducerPerConsumerPartition() {
 		return false;
 	}
 
@@ -123,7 +100,7 @@ public interface ProducerFactory<K, V> {
 	 * @since 2.5
 	 */
 	default Map<String, Object> getConfigurationProperties() {
-		throw new UnsupportedOperationException("This implementation doesn't support this method");
+		return Collections.emptyMap();
 	}
 
 	/**

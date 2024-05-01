@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 the original author or authors.
+ * Copyright 2022-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -72,6 +72,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.listener.ConsumerProperties;
 import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.kafka.support.KafkaMessageHeaderAccessor;
 import org.springframework.kafka.support.LoggingProducerListener;
 import org.springframework.kafka.support.ProducerListener;
 import org.springframework.kafka.support.serializer.DelegatingByTopicDeserializer;
@@ -102,6 +103,7 @@ public class KafkaRuntimeHints implements RuntimeHintsRegistrar {
 		Stream.of(
 					ConsumerProperties.class,
 					ContainerProperties.class,
+					KafkaMessageHeaderAccessor.class,
 					ProducerListener.class)
 				.forEach(type -> reflectionHints.registerType(type,
 						builder -> builder.withMembers(MemberCategory.INVOKE_DECLARED_METHODS)));
@@ -121,10 +123,8 @@ public class KafkaRuntimeHints implements RuntimeHintsRegistrar {
 					KafkaResourceFactory.class,
 					KafkaTemplate.class,
 					ProducerFactory.class,
-					KafkaOperations.class,
 					ConsumerFactory.class,
 					LoggingProducerListener.class,
-					ImplicitLinkedHashCollection.Element.class,
 					KafkaListenerAnnotationBeanPostProcessor.class)
 				.forEach(type -> reflectionHints.registerType(type,
 						builder -> builder.withMembers(MemberCategory.INVOKE_DECLARED_CONSTRUCTORS,
@@ -133,8 +133,7 @@ public class KafkaRuntimeHints implements RuntimeHintsRegistrar {
 
 		Stream.of(
 					KafkaBootstrapConfiguration.class,
-					CreatableTopic.class,
-					KafkaListenerEndpointRegistry.class)
+					CreatableTopic.class)
 				.forEach(type -> reflectionHints.registerType(type,
 						builder -> builder.withMembers(MemberCategory.INVOKE_DECLARED_CONSTRUCTORS)));
 
@@ -199,6 +198,7 @@ public class KafkaRuntimeHints implements RuntimeHintsRegistrar {
 		hints.proxies().registerJdkProxy(AopProxyUtils.completeJdkProxyInterfaces(Producer.class));
 
 		Stream.of(
+				"sun.security.provider.ConfigFile",
 				"org.apache.kafka.streams.processor.internals.StreamsPartitionAssignor",
 				"org.apache.kafka.streams.errors.DefaultProductionExceptionHandler",
 				"org.apache.kafka.streams.processor.FailOnInvalidTimestamp",

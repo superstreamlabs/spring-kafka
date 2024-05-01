@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2022 the original author or authors.
+ * Copyright 2017-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package org.springframework.kafka.annotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
@@ -46,6 +47,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.KafkaException.Level;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.config.KafkaListenerContainerFactory;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaAdmin;
@@ -55,11 +57,13 @@ import org.springframework.kafka.listener.BatchListenerFailedException;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.KafkaHeaders;
+import org.springframework.kafka.support.KafkaNull;
 import org.springframework.kafka.support.converter.BatchMessagingMessageConverter;
 import org.springframework.kafka.support.converter.BytesJsonMessageConverter;
 import org.springframework.kafka.support.converter.ConversionException;
 import org.springframework.kafka.support.serializer.DelegatingByTypeSerializer;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
+import org.springframework.kafka.test.EmbeddedKafkaZKBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.springframework.messaging.Message;
@@ -73,16 +77,20 @@ import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 /**
  * @author Gary Russell
  * @author Artem Bilan
+ * @author Vladimir Loginov
  *
  * @since 1.3.2
  *
  */
 @SpringJUnitConfig
 @DirtiesContext
-@EmbeddedKafka(partitions = 1, topics = { "blc1", "blc2", "blc3", "blc4", "blc5", "blc6", "blc6.DLT" })
+@EmbeddedKafka(kraft = false, partitions = 1, topics = { "blc1", "blc2", "blc3", "blc4", "blc5", "blc6", "blc6.DLT" })
 public class BatchListenerConversionTests {
 
 	private static final String DEFAULT_TEST_GROUP_ID = "blc";
+
+	@Autowired
+	private EmbeddedKafkaBroker embeddedKafka;
 
 	@Autowired
 	private Config config;
@@ -97,7 +105,9 @@ public class BatchListenerConversionTests {
 	private KafkaTemplate<Integer, Object> template;
 
 	@Test
-	public void testBatchOfPojos() throws Exception {
+	public void testBatchOfPojos(@Autowired KafkaListenerEndpointRegistry registry) throws Exception {
+		assertThat(this.embeddedKafka).isInstanceOf(EmbeddedKafkaZKBroker.class);
+		assertThat(registry.getListenerContainerIds()).contains("blc1.id", "blc2.id");
 		doTest(this.listener1, "blc1");
 		doTest(this.listener2, "blc2");
 	}
@@ -124,6 +134,8 @@ public class BatchListenerConversionTests {
 		assertThat(listener.received.size()).isGreaterThan(0);
 		assertThat(listener.received.get(0).getPayload()).isInstanceOf(Foo.class);
 		assertThat(listener.received.get(0).getPayload().getBar()).isEqualTo("bar");
+		assertThatNoException().isThrownBy(() -> this.template.send(
+				new GenericMessage<>(KafkaNull.INSTANCE, Collections.singletonMap(KafkaHeaders.TOPIC, topic))));
 		verify(admin, never()).clusterId();
 	}
 
@@ -171,7 +183,7 @@ public class BatchListenerConversionTests {
 					new ConcurrentKafkaListenerContainerFactory<>();
 			factory.setConsumerFactory(consumerFactory(embeddedKafka));
 			factory.setBatchListener(true);
-			factory.setMessageConverter(new BatchMessagingMessageConverter(converter()));
+			factory.setBatchMessageConverter(new BatchMessagingMessageConverter(converter()));
 			factory.setReplyTemplate(template(embeddedKafka));
 			DefaultErrorHandler eh = new DefaultErrorHandler(new DeadLetterPublishingRecoverer(template));
 			factory.setCommonErrorHandler(eh);
@@ -252,17 +264,17 @@ public class BatchListenerConversionTests {
 
 		private final String topic;
 
-		private final CountDownLatch latch1 = new CountDownLatch(1);
+		final CountDownLatch latch1 = new CountDownLatch(1);
 
-		private final CountDownLatch latch2 = new CountDownLatch(1);
+		final CountDownLatch latch2 = new CountDownLatch(1);
 
 		private final KafkaListenerContainerFactory<?> cf;
 
-		private List<Foo> received;
+		volatile List<Foo> received;
 
-		private List<String> receivedTopics;
+		volatile List<String> receivedTopics;
 
-		private List<Integer> receivedPartitions;
+		volatile List<Integer> receivedPartitions;
 
 		public Listener(String topic, KafkaListenerContainerFactory<?> cf) {
 			this.topic = topic;
@@ -273,7 +285,8 @@ public class BatchListenerConversionTests {
 			return this.cf;
 		}
 
-		@KafkaListener(topics = "#{__listener.topic}", groupId = "#{__listener.topic}.group",
+		@KafkaListener(id = "#{__listener.topic}.id", topics = "#{__listener.topic}",
+				groupId = "#{__listener.topic}.group",
 				containerFactory = "#{__listener.containerFactory}")
 		// @SendTo("foo") test WARN log for void return
 		public void listen1(List<Foo> foos, @Header(KafkaHeaders.RECEIVED_TOPIC) List<String> topics,
@@ -299,9 +312,9 @@ public class BatchListenerConversionTests {
 
 	public static class Listener3 {
 
-		private final CountDownLatch latch1 = new CountDownLatch(1);
+		final CountDownLatch latch1 = new CountDownLatch(1);
 
-		private List<Message<Foo>> received;
+		volatile List<Message<Foo>> received;
 
 		@KafkaListener(topics = "blc3", groupId = "blc3")
 		public void listen1(List<Message<Foo>> foos) {
@@ -315,11 +328,11 @@ public class BatchListenerConversionTests {
 
 	public static class Listener4 {
 
-		private final CountDownLatch latch1 = new CountDownLatch(1);
+		final CountDownLatch latch1 = new CountDownLatch(1);
 
-		private List<Foo> received;
+		volatile List<Foo> received;
 
-		private List<Foo> replies;
+		volatile List<Foo> replies;
 
 		@KafkaListener(topics = "blc4", groupId = "blc4")
 		@SendTo
@@ -348,7 +361,7 @@ public class BatchListenerConversionTests {
 
 		final CountDownLatch latch2 = new CountDownLatch(1);
 
-		final List<Foo> received = new ArrayList<>();
+		final List<Foo> received = Collections.synchronizedList(new ArrayList<>());
 
 		volatile String dlt;
 

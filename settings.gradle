@@ -2,19 +2,13 @@ pluginManagement {
 	repositories {
 		mavenCentral()
 		gradlePluginPortal()
-		maven { url 'https://repo.spring.io/plugins-release' }
+		maven { url 'https://repo.spring.io/release' }
 	}
 }
 
 plugins {
-	id 'com.gradle.enterprise' version '3.11.1'
-	id "io.spring.ge.conventions" version "0.0.7"
-}
-
-gradleEnterprise {
-	buildScan {
-		publishOnFailure()
-	}
+	id 'com.gradle.enterprise' version '3.12.6'
+	id "io.spring.ge.conventions" version "0.0.14"
 }
 
 rootProject.name = 'spring-kafka-dist'

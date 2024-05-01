@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2021 the original author or authors.
+ * Copyright 2018-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -51,14 +51,17 @@ class DestinationTopicPropertiesFactoryTests {
 
 	private final int numPartitions = 0;
 
-	private final FixedDelayStrategy fixedDelayStrategy =
-			FixedDelayStrategy.SINGLE_TOPIC;
-
-	private final TopicSuffixingStrategy defaultTopicSuffixingStrategy =
+	private final TopicSuffixingStrategy suffixWithDelayValueSuffixingStrategy =
 			TopicSuffixingStrategy.SUFFIX_WITH_DELAY_VALUE;
 
 	private final TopicSuffixingStrategy suffixWithIndexTopicSuffixingStrategy =
 			TopicSuffixingStrategy.SUFFIX_WITH_INDEX_VALUE;
+
+	private final SameIntervalTopicReuseStrategy multipleTopicsSameIntervalReuseStrategy =
+			SameIntervalTopicReuseStrategy.MULTIPLE_TOPICS;
+
+	private final SameIntervalTopicReuseStrategy singleTopicSameIntervalReuseStrategy =
+			SameIntervalTopicReuseStrategy.SINGLE_TOPIC;
 
 	private final DltStrategy dltStrategy =
 			DltStrategy.FAIL_ON_ERROR;
@@ -87,15 +90,16 @@ class DestinationTopicPropertiesFactoryTests {
 
 		List<DestinationTopic.Properties> propertiesList =
 				new DestinationTopicPropertiesFactory(retryTopicSuffix, dltSuffix, backOffValues,
-						classifier, numPartitions, kafkaOperations, fixedDelayStrategy,
-						dltStrategy, defaultTopicSuffixingStrategy, RetryTopicConstants.NOT_SET)
-						.createProperties();
+						classifier, numPartitions, kafkaOperations,
+						dltStrategy, suffixWithDelayValueSuffixingStrategy, multipleTopicsSameIntervalReuseStrategy,
+						RetryTopicConstants.NOT_SET).createProperties();
 
 		// then
 		assertThat(propertiesList.size() == 2).isTrue();
 		DestinationTopic.Properties mainTopicProperties = propertiesList.get(0);
 		assertThat(mainTopicProperties.suffix()).isEqualTo("");
 		assertThat(mainTopicProperties.isDltTopic()).isFalse();
+		assertThat(mainTopicProperties.isRetryTopic()).isFalse();
 		DestinationTopic mainTopic = new DestinationTopic("mainTopic", mainTopicProperties);
 		assertThat(mainTopic.getDestinationDelay()).isEqualTo(0L);
 		assertThat(mainTopic.shouldRetryOn(0, new IllegalArgumentException())).isTrue();
@@ -110,6 +114,7 @@ class DestinationTopicPropertiesFactoryTests {
 	private void assertDltTopic(DestinationTopic.Properties dltProperties) {
 		assertThat(dltProperties.suffix()).isEqualTo(dltSuffix);
 		assertThat(dltProperties.isDltTopic()).isTrue();
+		assertThat(dltProperties.isRetryTopic()).isFalse();
 		DestinationTopic dltTopic = new DestinationTopic("mainTopic", dltProperties);
 		assertThat(dltTopic.getDestinationDelay()).isEqualTo(0);
 		assertThat(dltTopic.shouldRetryOn(0, new IllegalArgumentException())).isFalse();
@@ -119,6 +124,7 @@ class DestinationTopicPropertiesFactoryTests {
 	}
 
 	@Test
+	@SuppressWarnings("deprecation")
 	void shouldCreateTwoRetryPropertiesForMultipleBackoffValues() {
 		// when
 		ExponentialBackOffPolicy backOffPolicy = new ExponentialBackOffPolicy();
@@ -130,9 +136,9 @@ class DestinationTopicPropertiesFactoryTests {
 
 		List<DestinationTopic.Properties> propertiesList =
 				new DestinationTopicPropertiesFactory(retryTopicSuffix, dltSuffix, backOffValues,
-						classifier, numPartitions, kafkaOperations, fixedDelayStrategy,
-						dltStrategy, TopicSuffixingStrategy.SUFFIX_WITH_DELAY_VALUE, RetryTopicConstants.NOT_SET)
-						.createProperties();
+						classifier, numPartitions, kafkaOperations,
+						dltStrategy, TopicSuffixingStrategy.SUFFIX_WITH_DELAY_VALUE,
+						multipleTopicsSameIntervalReuseStrategy, RetryTopicConstants.NOT_SET).createProperties();
 
 		List<DestinationTopic> destinationTopicList = propertiesList
 				.stream()
@@ -144,7 +150,9 @@ class DestinationTopicPropertiesFactoryTests {
 		DestinationTopic.Properties firstRetryProperties = propertiesList.get(1);
 		assertThat(firstRetryProperties.suffix()).isEqualTo(retryTopicSuffix + "-1000");
 		assertThat(firstRetryProperties.isDltTopic()).isFalse();
+		assertThat(firstRetryProperties.isRetryTopic()).isTrue();
 		DestinationTopic firstRetryDestinationTopic = destinationTopicList.get(1);
+		assertThat(firstRetryDestinationTopic.isReusableRetryTopic()).isFalse();
 		assertThat(firstRetryDestinationTopic.getDestinationDelay()).isEqualTo(1000);
 		assertThat(firstRetryDestinationTopic.getDestinationPartitions()).isEqualTo(numPartitions);
 		assertThat(firstRetryDestinationTopic.shouldRetryOn(0, new IllegalArgumentException())).isTrue();
@@ -154,7 +162,9 @@ class DestinationTopicPropertiesFactoryTests {
 		DestinationTopic.Properties secondRetryProperties = propertiesList.get(2);
 		assertThat(secondRetryProperties.suffix()).isEqualTo(retryTopicSuffix + "-2000");
 		assertThat(secondRetryProperties.isDltTopic()).isFalse();
+		assertThat(secondRetryProperties.isRetryTopic()).isTrue();
 		DestinationTopic secondRetryDestinationTopic = destinationTopicList.get(2);
+		assertThat(secondRetryDestinationTopic.isReusableRetryTopic()).isFalse();
 		assertThat(secondRetryDestinationTopic.getDestinationDelay()).isEqualTo(2000);
 		assertThat(secondRetryDestinationTopic.getDestinationPartitions()).isEqualTo(numPartitions);
 		assertThat(secondRetryDestinationTopic.shouldRetryOn(0, new IllegalArgumentException())).isTrue();
@@ -176,14 +186,10 @@ class DestinationTopicPropertiesFactoryTests {
 		List<Long> backOffValues = new BackOffValuesGenerator(maxAttempts, backOffPolicy).generateValues();
 
 		List<DestinationTopic.Properties> propertiesList =
-				new DestinationTopicPropertiesFactory(retryTopicSuffix, dltSuffix, backOffValues, classifier, numPartitions, kafkaOperations, fixedDelayStrategy,
-						noDltStrategy, TopicSuffixingStrategy.SUFFIX_WITH_DELAY_VALUE, RetryTopicConstants.NOT_SET)
-						.createProperties();
-
-		List<DestinationTopic> destinationTopicList = propertiesList
-				.stream()
-				.map(properties -> new DestinationTopic("mainTopic" + properties.suffix(), properties))
-				.collect(Collectors.toList());
+				new DestinationTopicPropertiesFactory(retryTopicSuffix, dltSuffix, backOffValues, classifier,
+						numPartitions, kafkaOperations, noDltStrategy,
+						TopicSuffixingStrategy.SUFFIX_WITH_DELAY_VALUE, multipleTopicsSameIntervalReuseStrategy,
+						RetryTopicConstants.NOT_SET).createProperties();
 
 		// then
 		assertThat(propertiesList.size() == 3).isTrue();
@@ -191,7 +197,8 @@ class DestinationTopicPropertiesFactoryTests {
 	}
 
 	@Test
-	void shouldCreateOneRetryPropertyForFixedBackoffWithSingleTopicStrategy() {
+	@SuppressWarnings("deprecation")
+	void shouldCreateOneRetryPropertyForFixedBackoffWithSingleTopicSameIntervalReuseStrategy() {
 
 		// when
 		FixedBackOffPolicy backOffPolicy = new FixedBackOffPolicy();
@@ -202,8 +209,9 @@ class DestinationTopicPropertiesFactoryTests {
 
 		List<DestinationTopic.Properties> propertiesList =
 				new DestinationTopicPropertiesFactory(retryTopicSuffix, dltSuffix, backOffValues,
-						classifier, numPartitions, kafkaOperations, FixedDelayStrategy.SINGLE_TOPIC,
-						dltStrategy, defaultTopicSuffixingStrategy, -1).createProperties();
+						classifier, numPartitions, kafkaOperations,
+						dltStrategy, suffixWithDelayValueSuffixingStrategy, singleTopicSameIntervalReuseStrategy,
+						-1).createProperties();
 
 		List<DestinationTopic> destinationTopicList = propertiesList
 				.stream()
@@ -213,14 +221,13 @@ class DestinationTopicPropertiesFactoryTests {
 		// then
 		assertThat(propertiesList.size() == 3).isTrue();
 
-		DestinationTopic.Properties mainTopicProperties = propertiesList.get(0);
 		DestinationTopic mainDestinationTopic = destinationTopicList.get(0);
 		assertThat(mainDestinationTopic.isMainTopic()).isTrue();
 
 		DestinationTopic.Properties firstRetryProperties = propertiesList.get(1);
 		assertThat(firstRetryProperties.suffix()).isEqualTo(retryTopicSuffix);
 		DestinationTopic retryDestinationTopic = destinationTopicList.get(1);
-		assertThat(retryDestinationTopic.isSingleTopicRetry()).isTrue();
+		assertThat(retryDestinationTopic.isReusableRetryTopic()).isTrue();
 		assertThat(retryDestinationTopic.getDestinationDelay()).isEqualTo(1000);
 
 		DestinationTopic.Properties dltProperties = propertiesList.get(2);
@@ -232,6 +239,7 @@ class DestinationTopicPropertiesFactoryTests {
 	}
 
 	@Test
+	@SuppressWarnings("deprecation")
 	void shouldCreateRetryPropertiesForFixedBackoffWithMultiTopicStrategy() {
 
 		// when
@@ -244,8 +252,8 @@ class DestinationTopicPropertiesFactoryTests {
 		List<DestinationTopic.Properties> propertiesList =
 				new DestinationTopicPropertiesFactory(retryTopicSuffix, dltSuffix, backOffValues,
 						classifier, numPartitions, kafkaOperations,
-						FixedDelayStrategy.MULTIPLE_TOPICS,
-						dltStrategy, defaultTopicSuffixingStrategy, -1).createProperties();
+						dltStrategy, suffixWithDelayValueSuffixingStrategy, multipleTopicsSameIntervalReuseStrategy,
+						-1).createProperties();
 
 		List<DestinationTopic> destinationTopicList = propertiesList
 				.stream()
@@ -255,20 +263,20 @@ class DestinationTopicPropertiesFactoryTests {
 		// then
 		assertThat(propertiesList.size() == 4).isTrue();
 
-		DestinationTopic.Properties mainTopicProperties = propertiesList.get(0);
 		DestinationTopic mainDestinationTopic = destinationTopicList.get(0);
 		assertThat(mainDestinationTopic.isMainTopic()).isTrue();
 
 		DestinationTopic.Properties firstRetryProperties = propertiesList.get(1);
 		assertThat(firstRetryProperties.suffix()).isEqualTo(retryTopicSuffix + "-0");
+		assertThat(firstRetryProperties.isRetryTopic()).isTrue();
 		DestinationTopic retryDestinationTopic = destinationTopicList.get(1);
-		assertThat(retryDestinationTopic.isSingleTopicRetry()).isFalse();
+		assertThat(retryDestinationTopic.isReusableRetryTopic()).isFalse();
 		assertThat(retryDestinationTopic.getDestinationDelay()).isEqualTo(5000);
 
 		DestinationTopic.Properties secondRetryProperties = propertiesList.get(2);
 		assertThat(secondRetryProperties.suffix()).isEqualTo(retryTopicSuffix + "-1");
 		DestinationTopic secondRetryDestinationTopic = destinationTopicList.get(2);
-		assertThat(secondRetryDestinationTopic.isSingleTopicRetry()).isFalse();
+		assertThat(secondRetryDestinationTopic.isReusableRetryTopic()).isFalse();
 		assertThat(secondRetryDestinationTopic.getDestinationDelay()).isEqualTo(5000);
 
 		DestinationTopic.Properties dltProperties = propertiesList.get(3);
@@ -280,6 +288,7 @@ class DestinationTopicPropertiesFactoryTests {
 	}
 
 	@Test
+	@SuppressWarnings("deprecation")
 	void shouldSuffixRetryTopicsWithIndexIfSuffixWithIndexStrategy() {
 
 		// setup
@@ -291,15 +300,16 @@ class DestinationTopicPropertiesFactoryTests {
 		List<DestinationTopic.Properties> propertiesList =
 				new DestinationTopicPropertiesFactory(retryTopicSuffix, dltSuffix, backOffValues,
 						classifier, numPartitions, kafkaOperations,
-						FixedDelayStrategy.SINGLE_TOPIC,
-						dltStrategy, suffixWithIndexTopicSuffixingStrategy, -1).createProperties();
+						dltStrategy, suffixWithIndexTopicSuffixingStrategy,
+						multipleTopicsSameIntervalReuseStrategy, -1).createProperties();
 
 		// then
-		IntStream.range(1, maxAttempts)
-				.forEach(index -> assertThat(propertiesList.get(index).suffix()).isEqualTo(retryTopicSuffix + "-" + String.valueOf(index - 1)));
+		IntStream.range(1, maxAttempts).forEach(index -> assertThat(propertiesList.get(index).suffix())
+				.isEqualTo(retryTopicSuffix + "-" + String.valueOf(index - 1)));
 	}
 
 	@Test
+	@SuppressWarnings("deprecation")
 	void shouldSuffixRetryTopicsWithIndexIfFixedDelayWithMultipleTopics() {
 
 		// setup
@@ -312,15 +322,17 @@ class DestinationTopicPropertiesFactoryTests {
 		List<DestinationTopic.Properties> propertiesList =
 				new DestinationTopicPropertiesFactory(retryTopicSuffix, dltSuffix, backOffValues,
 						classifier, numPartitions, kafkaOperations,
-						FixedDelayStrategy.MULTIPLE_TOPICS,
-						dltStrategy, suffixWithIndexTopicSuffixingStrategy, -1).createProperties();
+						dltStrategy, suffixWithIndexTopicSuffixingStrategy, multipleTopicsSameIntervalReuseStrategy,
+						-1).createProperties();
 
 		// then
 		IntStream.range(1, maxAttempts)
-				.forEach(index -> assertThat(propertiesList.get(index).suffix()).isEqualTo(retryTopicSuffix + "-" + String.valueOf(index - 1)));
+				.forEach(index -> assertThat(propertiesList.get(index).suffix()).isEqualTo(retryTopicSuffix +
+						"-" + String.valueOf(index - 1)));
 	}
 
 	@Test
+	@SuppressWarnings("deprecation")
 	void shouldSuffixRetryTopicsWithMixedIfMaxDelayReached() {
 
 		// setup
@@ -332,13 +344,14 @@ class DestinationTopicPropertiesFactoryTests {
 		List<Long> backOffValues = new BackOffValuesGenerator(maxAttempts, backOffPolicy).generateValues();
 
 		// when
-		List<DestinationTopic.Properties> propertiesList =
-				new DestinationTopicPropertiesFactory(retryTopicSuffix, dltSuffix, backOffValues,
-						classifier, numPartitions, kafkaOperations,
-						FixedDelayStrategy.MULTIPLE_TOPICS,
-						dltStrategy, defaultTopicSuffixingStrategy, -1).createProperties();
+		DestinationTopicPropertiesFactory factory = new DestinationTopicPropertiesFactory(retryTopicSuffix, dltSuffix,
+				backOffValues, classifier, numPartitions, kafkaOperations,
+				dltStrategy, suffixWithDelayValueSuffixingStrategy, multipleTopicsSameIntervalReuseStrategy, -1);
+
+		List<DestinationTopic.Properties> propertiesList = factory.createProperties();
 
 		// then
+		assertThat(factory.retryTopicsAmount() == 4).isTrue();
 		assertThat(propertiesList.size() == 6).isTrue();
 		assertThat(propertiesList.get(0).suffix()).isEqualTo("");
 		assertThat(propertiesList.get(1).suffix()).isEqualTo(retryTopicSuffix + "-1000");
@@ -347,4 +360,106 @@ class DestinationTopicPropertiesFactoryTests {
 		assertThat(propertiesList.get(4).suffix()).isEqualTo(retryTopicSuffix + "-3000-1");
 		assertThat(propertiesList.get(5).suffix()).isEqualTo(dltSuffix);
 	}
+
+	@Test
+	@SuppressWarnings("deprecation")
+	void shouldReuseRetryTopicsIfMaxDelayReachedWithDelayValueSuffixingStrategy() {
+
+		// setup
+		ExponentialBackOffPolicy backOffPolicy = new ExponentialBackOffPolicy();
+		backOffPolicy.setInitialInterval(1000);
+		backOffPolicy.setMultiplier(2);
+		backOffPolicy.setMaxInterval(3000);
+		int maxAttempts = 5;
+		List<Long> backOffValues = new BackOffValuesGenerator(maxAttempts, backOffPolicy).generateValues();
+
+		// when
+		DestinationTopicPropertiesFactory factory = new DestinationTopicPropertiesFactory(retryTopicSuffix, dltSuffix,
+				backOffValues, classifier, numPartitions, kafkaOperations,
+				dltStrategy, suffixWithDelayValueSuffixingStrategy, singleTopicSameIntervalReuseStrategy, -1);
+
+		List<DestinationTopic.Properties> propertiesList = factory.createProperties();
+
+		// then
+		assertThat(factory.retryTopicsAmount()).isEqualTo(3);
+		assertThat(propertiesList.size()).isEqualTo(5);
+		assertThat(propertiesList.get(0).suffix()).isEqualTo("");
+		assertRetryTopic(propertiesList.get(1), maxAttempts, 1000L, retryTopicSuffix + "-1000", false, false);
+		assertRetryTopic(propertiesList.get(2), maxAttempts, 2000L, retryTopicSuffix + "-2000", false, false);
+		assertRetryTopic(propertiesList.get(3), maxAttempts, 3000L, retryTopicSuffix + "-3000", true, false);
+		assertThat(propertiesList.get(4).suffix()).isEqualTo(dltSuffix);
+	}
+
+	@Test
+	@SuppressWarnings("deprecation")
+	void shouldReuseRetryTopicsIfMaxDelayReachedWithIndexValueSuffixingStrategy() {
+
+		// setup
+		ExponentialBackOffPolicy backOffPolicy = new ExponentialBackOffPolicy();
+		backOffPolicy.setInitialInterval(1000);
+		backOffPolicy.setMultiplier(2);
+		backOffPolicy.setMaxInterval(3000);
+		int maxAttempts = 5;
+		List<Long> backOffValues = new BackOffValuesGenerator(maxAttempts, backOffPolicy).generateValues();
+
+		// when
+		DestinationTopicPropertiesFactory factory = new DestinationTopicPropertiesFactory(retryTopicSuffix, dltSuffix,
+				backOffValues, classifier, numPartitions, kafkaOperations,
+				dltStrategy, suffixWithIndexTopicSuffixingStrategy, singleTopicSameIntervalReuseStrategy, -1);
+
+		List<DestinationTopic.Properties> propertiesList = factory.createProperties();
+
+		// then
+		assertThat(factory.retryTopicsAmount()).isEqualTo(3);
+		assertThat(propertiesList.size()).isEqualTo(5);
+		assertThat(propertiesList.get(0).suffix()).isEqualTo("");
+		assertRetryTopic(propertiesList.get(1), maxAttempts, 1000L, retryTopicSuffix + "-0", false, false);
+		assertRetryTopic(propertiesList.get(2), maxAttempts, 2000L, retryTopicSuffix + "-1", false, false);
+		assertRetryTopic(propertiesList.get(3), maxAttempts, 3000L, retryTopicSuffix + "-2", true, false);
+		assertThat(propertiesList.get(4).suffix()).isEqualTo(dltSuffix);
+	}
+
+	@Test
+	@SuppressWarnings("deprecation")
+	void shouldNotReuseRetryTopicsIfRepeatedIntervalsAreInTheMiddleOfChain() {
+
+		// setup
+		List<Long> backOffValues = List.of(1000L, 2000L, 2000L, 2000L, 3000L);
+		int maxAttempts = backOffValues.size() + 1;
+
+		// when
+		DestinationTopicPropertiesFactory factory = new DestinationTopicPropertiesFactory(retryTopicSuffix, dltSuffix,
+				backOffValues, classifier, numPartitions, kafkaOperations,
+				dltStrategy, suffixWithDelayValueSuffixingStrategy, multipleTopicsSameIntervalReuseStrategy, -1);
+
+		List<DestinationTopic.Properties> propertiesList = factory.createProperties();
+
+		// then
+		assertThat(factory.retryTopicsAmount()).isEqualTo(5);
+		assertThat(propertiesList.size()).isEqualTo(7);
+		assertThat(propertiesList.get(0).suffix()).isEqualTo("");
+		assertRetryTopic(propertiesList.get(1), maxAttempts, 1000L, retryTopicSuffix + "-1000", false, false);
+		assertRetryTopic(propertiesList.get(2), maxAttempts, 2000L, retryTopicSuffix + "-2000-0", false, false);
+		assertRetryTopic(propertiesList.get(3), maxAttempts, 2000L, retryTopicSuffix + "-2000-1", false, false);
+		assertRetryTopic(propertiesList.get(4), maxAttempts, 2000L, retryTopicSuffix + "-2000-2", false, false);
+		assertRetryTopic(propertiesList.get(5), maxAttempts, 3000L, retryTopicSuffix + "-3000", false, false);
+		assertThat(propertiesList.get(6).suffix()).isEqualTo(dltSuffix);
+	}
+
+	@SuppressWarnings("deprecation")
+	private void assertRetryTopic(DestinationTopic.Properties topicProperties, int maxAttempts,
+			Long expectedDelay, String expectedSuffix, boolean expectedReusableTopic,
+			boolean expectedIsSingleTopicRetry) {
+		assertThat(topicProperties.suffix()).isEqualTo(expectedSuffix);
+		assertThat(topicProperties.isRetryTopic()).isTrue();
+		DestinationTopic topic = new DestinationTopic("irrelevant" + topicProperties.suffix(), topicProperties);
+		assertThat(topic.isDltTopic()).isFalse();
+		assertThat(topic.isReusableRetryTopic()).isEqualTo(expectedReusableTopic);
+		assertThat(topic.getDestinationDelay()).isEqualTo(expectedDelay);
+		assertThat(topic.getDestinationPartitions()).isEqualTo(numPartitions);
+		assertThat(topic.shouldRetryOn(0, new IllegalArgumentException())).isTrue();
+		assertThat(topic.shouldRetryOn(maxAttempts, new IllegalArgumentException())).isFalse();
+		assertThat(topic.shouldRetryOn(0, new RuntimeException())).isFalse();
+	}
+
 }

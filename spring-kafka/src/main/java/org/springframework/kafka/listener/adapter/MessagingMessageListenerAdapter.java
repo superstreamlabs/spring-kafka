@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2022 the original author or authors.
+ * Copyright 2016-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -52,6 +52,7 @@ import org.springframework.kafka.support.KafkaNull;
 import org.springframework.kafka.support.KafkaUtils;
 import org.springframework.kafka.support.converter.MessagingMessageConverter;
 import org.springframework.kafka.support.converter.RecordMessageConverter;
+import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageHeaders;
@@ -79,10 +80,14 @@ import org.springframework.util.StringUtils;
  * @author Gary Russell
  * @author Artem Bilan
  * @author Venil Noronha
+ * @author Nathan Xu
+ * @author Wang ZhiYang
  */
 public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerSeekAware {
 
 	private static final SpelExpressionParser PARSER = new SpelExpressionParser();
+
+	private static final Acknowledgment NO_OP_ACK = new NoOpAck();
 
 	/**
 	 * Message used when no conversion is needed.
@@ -119,6 +124,8 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 	private KafkaTemplate replyTemplate;
 
 	private boolean hasAckParameter;
+
+	private boolean noOpAck;
 
 	private boolean hasMetadataParameter;
 
@@ -353,25 +360,27 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 	protected final Object invokeHandler(Object data, @Nullable Acknowledgment acknowledgment, Message<?> message,
 			Consumer<?, ?> consumer) {
 
+		Acknowledgment ack = acknowledgment;
+		if (ack == null && this.noOpAck) {
+			ack = NO_OP_ACK;
+		}
 		try {
 			if (data instanceof List && !this.isConsumerRecordList) {
-				return this.handlerMethod.invoke(message, acknowledgment, consumer);
+				return this.handlerMethod.invoke(message, ack, consumer);
+			}
+			else if (this.hasMetadataParameter) {
+				return this.handlerMethod.invoke(message, data, ack, consumer,
+						AdapterUtils.buildConsumerRecordMetadata(data));
 			}
 			else {
-				if (this.hasMetadataParameter) {
-					return this.handlerMethod.invoke(message, data, acknowledgment, consumer,
-							AdapterUtils.buildConsumerRecordMetadata(data));
-				}
-				else {
-					return this.handlerMethod.invoke(message, data, acknowledgment, consumer);
-				}
+				return this.handlerMethod.invoke(message, data, ack, consumer);
 			}
 		}
 		catch (org.springframework.messaging.converter.MessageConversionException ex) {
-			throw checkAckArg(acknowledgment, message, new MessageConversionException("Cannot handle message", ex));
+			throw checkAckArg(ack, message, new MessageConversionException("Cannot handle message", ex));
 		}
 		catch (MethodArgumentNotValidException ex) {
-			throw checkAckArg(acknowledgment, message, ex);
+			throw checkAckArg(ack, message, ex);
 		}
 		catch (MessagingException ex) {
 			throw new ListenerExecutionFailedException(createMessagingErrorMessage("Listener method could not " +
@@ -461,43 +470,37 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 		if (!returnTypeMessage && topic == null) {
 			this.logger.debug(() -> "No replyTopic to handle the reply: " + result);
 		}
-		else if (result instanceof Message) {
-			Message<?> reply = checkHeaders(result, topic, source);
+		else if (result instanceof Message<?> mResult) {
+			Message<?> reply = checkHeaders(mResult, topic, source);
 			this.replyTemplate.send(reply);
 		}
-		else {
-			if (result instanceof Iterable) {
-				Iterator<?> iterator = ((Iterable<?>) result).iterator();
-				boolean iterableOfMessages = false;
-				if (iterator.hasNext()) {
-					iterableOfMessages = iterator.next() instanceof Message;
-				}
-				if (iterableOfMessages || this.splitIterables) {
-					((Iterable<V>) result).forEach(v -> {
-						if (v instanceof Message) {
-							this.replyTemplate.send((Message<?>) v);
-						}
-						else {
-							this.replyTemplate.send(topic, v);
-						}
-					});
+		else if (result instanceof Iterable<?> iterable && (iterableOfMessages(iterable) || this.splitIterables)) {
+			iterable.forEach(v -> {
+				if (v instanceof Message<?> mv) {
+					Message<?> aReply = checkHeaders(mv, topic, source);
+					this.replyTemplate.send(aReply);
 				}
 				else {
-					sendSingleResult(result, topic, source);
+					this.replyTemplate.send(topic, v);
 				}
-			}
-			else {
-				sendSingleResult(result, topic, source);
-			}
+			});
+		}
+		else {
+			sendSingleResult(result, topic, source);
 		}
 	}
 
-	private Message<?> checkHeaders(Object result, String topic, @Nullable Object source) { // NOSONAR (complexity)
-		Message<?> reply = (Message<?>) result;
+	private boolean iterableOfMessages(Iterable<?> iterable) {
+		Iterator<?> iterator = iterable.iterator();
+		return iterator.hasNext() && iterator.next() instanceof Message;
+	}
+
+	private Message<?> checkHeaders(Message<?> reply, @Nullable String topic, @Nullable Object source) { // NOSONAR (complexity)
 		MessageHeaders headers = reply.getHeaders();
-		boolean needsTopic = headers.get(KafkaHeaders.TOPIC) == null;
+		boolean needsTopic = topic != null && headers.get(KafkaHeaders.TOPIC) == null;
 		boolean sourceIsMessage = source instanceof Message;
-		boolean needsCorrelation = headers.get(this.correlationHeaderName) == null && sourceIsMessage;
+		boolean needsCorrelation = headers.get(this.correlationHeaderName) == null && sourceIsMessage
+				&& getCorrelation((Message<?>) source) != null;
 		boolean needsPartition = headers.get(KafkaHeaders.PARTITION) == null && sourceIsMessage
 				&& getReplyPartition((Message<?>) source) != null;
 		if (needsTopic || needsCorrelation || needsPartition) {
@@ -505,11 +508,10 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 			if (needsTopic) {
 				builder.setHeader(KafkaHeaders.TOPIC, topic);
 			}
-			if (needsCorrelation && sourceIsMessage) {
-				builder.setHeader(this.correlationHeaderName,
-						((Message<?>) source).getHeaders().get(this.correlationHeaderName));
+			if (needsCorrelation) {
+				setCorrelation(builder, (Message<?>) source);
 			}
-			if (sourceIsMessage && reply.getHeaders().get(KafkaHeaders.REPLY_PARTITION) == null) {
+			if (needsPartition) {
 				setPartition(builder, (Message<?>) source);
 			}
 			reply = builder.build();
@@ -519,14 +521,8 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 
 	@SuppressWarnings("unchecked")
 	private void sendSingleResult(Object result, String topic, @Nullable Object source) {
-		byte[] correlationId = null;
-		boolean sourceIsMessage = source instanceof Message;
-		if (sourceIsMessage
-				&& ((Message<?>) source).getHeaders().get(this.correlationHeaderName) != null) {
-			correlationId = ((Message<?>) source).getHeaders().get(this.correlationHeaderName, byte[].class);
-		}
-		if (sourceIsMessage) {
-			sendReplyForMessageSource(result, topic, source, correlationId);
+		if (source instanceof Message<?> message) {
+			sendReplyForMessageSource(result, topic, message, getCorrelation(message));
 		}
 		else {
 			this.replyTemplate.send(topic, result);
@@ -534,11 +530,11 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 	}
 
 	@SuppressWarnings("unchecked")
-	private void sendReplyForMessageSource(Object result, String topic, Object source, @Nullable byte[] correlationId) {
+	private void sendReplyForMessageSource(Object result, String topic, Message<?> source, @Nullable byte[] correlationId) {
 		MessageBuilder<Object> builder = MessageBuilder.withPayload(result)
 				.setHeader(KafkaHeaders.TOPIC, topic);
 		if (this.replyHeadersConfigurer != null) {
-			Map<String, Object> headersToCopy = ((Message<?>) source).getHeaders().entrySet().stream()
+			Map<String, Object> headersToCopy = source.getHeaders().entrySet().stream()
 					.filter(e -> {
 						String key = e.getKey();
 						return !key.equals(MessageHeaders.ID) && !key.equals(MessageHeaders.TIMESTAMP)
@@ -558,8 +554,20 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 		if (correlationId != null) {
 			builder.setHeader(this.correlationHeaderName, correlationId);
 		}
-		setPartition(builder, ((Message<?>) source));
+		setPartition(builder, source);
 		this.replyTemplate.send(builder.build());
+	}
+
+	private void setCorrelation(MessageBuilder<?> builder, Message<?> source) {
+		byte[] correlationBytes = getCorrelation(source);
+		if (correlationBytes != null) {
+			builder.setHeader(this.correlationHeaderName, correlationBytes);
+		}
+	}
+
+	@Nullable
+	private byte[] getCorrelation(Message<?> source) {
+		return source.getHeaders().get(this.correlationHeaderName, byte[].class);
 	}
 
 	private void setPartition(MessageBuilder<?> builder, Message<?> source) {
@@ -607,6 +615,9 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 			boolean isNotConvertible = parameterIsType(parameterType, ConsumerRecord.class);
 			boolean isAck = parameterIsType(parameterType, Acknowledgment.class);
 			this.hasAckParameter |= isAck;
+			if (isAck) {
+				this.noOpAck |= methodParameter.getParameterAnnotation(NonNull.class) != null;
+			}
 			isNotConvertible |= isAck;
 			boolean isConsumer = parameterIsType(parameterType, Consumer.class);
 			isNotConvertible |= isConsumer;
@@ -628,25 +639,8 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 					break;
 				}
 			}
-			else if (isAck) {
+			else if (isAck || isConsumer || annotationHeaderIsGroupId(methodParameter)) {
 				allowedBatchParameters++;
-			}
-			else if (methodParameter.hasParameterAnnotation(Header.class)) {
-				Header header = methodParameter.getParameterAnnotation(Header.class);
-				if (header != null && KafkaHeaders.GROUP_ID.equals(header.value())) {
-					allowedBatchParameters++;
-				}
-			}
-			else {
-				if (isConsumer) {
-					allowedBatchParameters++;
-				}
-				else {
-					if (parameterType instanceof ParameterizedType paramType
-							&& paramType.getRawType().equals(Consumer.class)) {
-						allowedBatchParameters++;
-					}
-				}
 			}
 		}
 
@@ -654,7 +648,6 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 			this.conversionNeeded = false;
 		}
 		boolean validParametersForBatch = method.getGenericParameterTypes().length <= allowedBatchParameters;
-
 		if (!validParametersForBatch) {
 			String stateMessage = "A parameter of type '%s' must be the only parameter "
 					+ "(except for an optional 'Acknowledgment' and/or 'Consumer' "
@@ -674,19 +667,16 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 		Type genericParameterType = methodParameter.getGenericParameterType();
 		if (genericParameterType instanceof ParameterizedType parameterizedType) {
 			if (parameterizedType.getRawType().equals(Message.class)) {
-				genericParameterType = ((ParameterizedType) genericParameterType).getActualTypeArguments()[0];
+				genericParameterType = parameterizedType.getActualTypeArguments()[0];
 			}
 			else if (parameterizedType.getRawType().equals(List.class)
 					&& parameterizedType.getActualTypeArguments().length == 1) {
 
-				Type paramType = parameterizedType.getActualTypeArguments()[0];
-				this.isConsumerRecordList = paramType.equals(ConsumerRecord.class)
-						|| (isSimpleListOfConsumerRecord(paramType)
-						|| isListOfConsumerRecordUpperBounded(paramType));
-				boolean messageHasGeneric = paramType instanceof ParameterizedType pType
-						&& pType.getRawType().equals(Message.class);
-				this.isMessageList = paramType.equals(Message.class) || messageHasGeneric;
-				if (messageHasGeneric) {
+				Type paramType = getTypeFromWildCardWithUpperBound(parameterizedType.getActualTypeArguments()[0]);
+				this.isConsumerRecordList = parameterIsType(paramType, ConsumerRecord.class);
+				boolean messageWithGeneric = rawByParameterIsType(paramType, Message.class);
+				this.isMessageList = Message.class.equals(paramType) || messageWithGeneric;
+				if (messageWithGeneric) {
 					genericParameterType = ((ParameterizedType) paramType).getActualTypeArguments()[0];
 				}
 			}
@@ -697,40 +687,33 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 		return genericParameterType;
 	}
 
-	private boolean isSimpleListOfConsumerRecord(Type paramType) {
-		return paramType instanceof ParameterizedType pType && pType.getRawType().equals(ConsumerRecord.class);
+	private boolean annotationHeaderIsGroupId(MethodParameter methodParameter) {
+		Header header = methodParameter.getParameterAnnotation(Header.class);
+		return header != null && KafkaHeaders.GROUP_ID.equals(header.value());
 	}
 
-	private boolean isListOfConsumerRecordUpperBounded(Type paramType) {
-		return isWildCardWithUpperBound(paramType)
-			&& ((WildcardType) paramType).getUpperBounds()[0] instanceof ParameterizedType wildCardZero
-			&& wildCardZero.getRawType().equals(ConsumerRecord.class);
-	}
-
-	private boolean isWildCardWithUpperBound(Type paramType) {
-		return paramType instanceof WildcardType wcType
-			&& wcType.getUpperBounds() != null
-			&& wcType.getUpperBounds().length > 0;
+	private Type getTypeFromWildCardWithUpperBound(Type paramType) {
+		if (paramType instanceof WildcardType wcType
+				&& wcType.getUpperBounds() != null
+				&& wcType.getUpperBounds().length > 0) {
+			paramType = wcType.getUpperBounds()[0];
+		}
+		return paramType;
 	}
 
 	private boolean isMessageWithNoTypeInfo(Type parameterType) {
-		if (parameterType instanceof ParameterizedType parameterizedType) {
-			Type rawType = parameterizedType.getRawType();
-			if  (rawType.equals(Message.class)) {
-				return parameterizedType.getActualTypeArguments()[0] instanceof WildcardType;
-			}
+		if (parameterType instanceof ParameterizedType pType && pType.getRawType().equals(Message.class)) {
+			return pType.getActualTypeArguments()[0] instanceof WildcardType;
 		}
-		return parameterType.equals(Message.class); // could be Message without a generic type
+		return Message.class.equals(parameterType); // could be Message without a generic type
 	}
 
 	private boolean parameterIsType(Type parameterType, Type type) {
-		if (parameterType instanceof ParameterizedType parameterizedType) {
-			Type rawType = parameterizedType.getRawType();
-			if (rawType.equals(type)) {
-				return true;
-			}
-		}
-		return parameterType.equals(type);
+		return parameterType.equals(type) || rawByParameterIsType(parameterType, type);
+	}
+
+	private boolean rawByParameterIsType(Type parameterType, Type type) {
+		return parameterType instanceof ParameterizedType pType && pType.getRawType().equals(type);
 	}
 
 	/**
@@ -741,6 +724,14 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 	 * @since 2.0
 	 */
 	public record ReplyExpressionRoot(Object request, Object source, Object result) {
+	}
+
+	static class NoOpAck implements Acknowledgment {
+
+		@Override
+		public void acknowledge() {
+		}
+
 	}
 
 }

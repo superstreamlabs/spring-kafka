@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2022 the original author or authors.
+ * Copyright 2018-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -46,7 +47,7 @@ import org.springframework.util.backoff.BackOffExecution;
  */
 class FailedRecordTracker implements RecoveryStrategy {
 
-	private final ThreadLocal<Map<TopicPartition, FailedRecord>> failures = new ThreadLocal<>(); // intentionally not static
+	private final Map<Thread, Map<TopicPartition, FailedRecord>> failures = new ConcurrentHashMap<>();
 
 	private final ConsumerAwareRecordRecoverer recoverer;
 
@@ -76,7 +77,7 @@ class FailedRecordTracker implements RecoveryStrategy {
 		Assert.notNull(backOff, "'backOff' cannot be null");
 		if (recoverer == null) {
 			this.recoverer = (rec, consumer, thr) -> {
-				Map<TopicPartition, FailedRecord> map = this.failures.get();
+				Map<TopicPartition, FailedRecord> map = this.failures.get(Thread.currentThread());
 				FailedRecord failedRecord = null;
 				if (map != null) {
 					failedRecord = map.get(new TopicPartition(rec.topic(), rec.partition()));
@@ -89,8 +90,8 @@ class FailedRecordTracker implements RecoveryStrategy {
 			};
 		}
 		else {
-			if (recoverer instanceof ConsumerAwareRecordRecoverer) {
-				this.recoverer = (ConsumerAwareRecordRecoverer) recoverer;
+			if (recoverer instanceof ConsumerAwareRecordRecoverer carr) {
+				this.recoverer = carr;
 			}
 			else {
 				this.recoverer = (rec, consumer, ex) -> recoverer.accept(rec, ex);
@@ -172,11 +173,8 @@ class FailedRecordTracker implements RecoveryStrategy {
 			attemptRecovery(record, exception, null, consumer);
 			return true;
 		}
-		Map<TopicPartition, FailedRecord> map = this.failures.get();
-		if (map == null) {
-			this.failures.set(new HashMap<>());
-			map = this.failures.get();
-		}
+		Thread currentThread = Thread.currentThread();
+		Map<TopicPartition, FailedRecord> map = this.failures.computeIfAbsent(currentThread, t -> new HashMap<>());
 		TopicPartition topicPartition = new TopicPartition(record.topic(), record.partition());
 		FailedRecord failedRecord = getFailedRecordInstance(record, exception, map, topicPartition);
 		this.retryListeners.forEach(rl ->
@@ -190,7 +188,7 @@ class FailedRecordTracker implements RecoveryStrategy {
 			attemptRecovery(record, exception, topicPartition, consumer);
 			map.remove(topicPartition);
 			if (map.isEmpty()) {
-				this.failures.remove();
+				this.failures.remove(currentThread);
 			}
 			return true;
 		}
@@ -199,12 +197,7 @@ class FailedRecordTracker implements RecoveryStrategy {
 	private FailedRecord getFailedRecordInstance(ConsumerRecord<?, ?> record, Exception exception,
 			Map<TopicPartition, FailedRecord> map, TopicPartition topicPartition) {
 
-		Exception realException = exception;
-		if (realException  instanceof ListenerExecutionFailedException
-				&& realException.getCause() instanceof Exception) {
-
-			realException = (Exception) realException.getCause();
-		}
+		Exception realException = ErrorHandlingUtils.findRootCause(exception);
 		FailedRecord failedRecord = map.get(topicPartition);
 		if (failedRecord == null || failedRecord.getOffset() != record.offset()
 				|| (this.resetStateOnExceptionChange
@@ -238,14 +231,14 @@ class FailedRecordTracker implements RecoveryStrategy {
 		catch (RuntimeException e) {
 			this.retryListeners.forEach(rl -> rl.recoveryFailed(record, exception, e));
 			if (tp != null && this.resetStateOnRecoveryFailure) {
-				this.failures.get().remove(tp);
+				this.failures.get(Thread.currentThread()).remove(tp);
 			}
 			throw e;
 		}
 	}
 
 	void clearThreadState() {
-		this.failures.remove();
+		this.failures.remove(Thread.currentThread());
 	}
 
 	ConsumerAwareRecordRecoverer getRecoverer() {
@@ -253,13 +246,13 @@ class FailedRecordTracker implements RecoveryStrategy {
 	}
 
 	/**
-	 * Return the number of the next delivery attempt for this topic/partition/offsete.
+	 * Return the number of the next delivery attempt for this topic/partition/offset.
 	 * @param topicPartitionOffset the topic/partition/offset.
 	 * @return the delivery attempt.
 	 * @since 2.5
 	 */
 	int deliveryAttempt(TopicPartitionOffset topicPartitionOffset) {
-		Map<TopicPartition, FailedRecord> map = this.failures.get();
+		Map<TopicPartition, FailedRecord> map = this.failures.get(Thread.currentThread());
 		if (map == null) {
 			return 1;
 		}

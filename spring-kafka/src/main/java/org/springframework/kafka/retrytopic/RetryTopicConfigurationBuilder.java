@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2022 the original author or authors.
+ * Copyright 2018-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,26 +58,29 @@ public class RetryTopicConfigurationBuilder {
 
 	private EndpointHandlerMethod dltHandlerMethod;
 
+	@Nullable
 	private String retryTopicSuffix;
 
+	@Nullable
 	private String dltSuffix;
 
 	private RetryTopicConfiguration.TopicCreation topicCreationConfiguration = new RetryTopicConfiguration.TopicCreation();
 
 	private ConcurrentKafkaListenerContainerFactory<?, ?> listenerContainerFactory;
 
+	@Nullable
 	private String listenerContainerFactoryName;
 
 	@Nullable
 	private BinaryExceptionClassifierBuilder classifierBuilder;
-
-	private FixedDelayStrategy fixedDelayStrategy = FixedDelayStrategy.MULTIPLE_TOPICS;
 
 	private DltStrategy dltStrategy = DltStrategy.ALWAYS_RETRY_ON_ERROR;
 
 	private long timeout = RetryTopicConstants.NOT_SET;
 
 	private TopicSuffixingStrategy topicSuffixingStrategy = TopicSuffixingStrategy.SUFFIX_WITH_DELAY_VALUE;
+
+	private SameIntervalTopicReuseStrategy sameIntervalTopicReuseStrategy = SameIntervalTopicReuseStrategy.MULTIPLE_TOPICS;
 
 	@Nullable
 	private Boolean autoStartDltHandler;
@@ -206,7 +209,7 @@ public class RetryTopicConfigurationBuilder {
 	 * @param suffix the suffix.
 	 * @return the builder.
 	 */
-	public RetryTopicConfigurationBuilder retryTopicSuffix(String suffix) {
+	public RetryTopicConfigurationBuilder retryTopicSuffix(@Nullable String suffix) {
 		this.retryTopicSuffix = suffix;
 		return this;
 	}
@@ -216,7 +219,7 @@ public class RetryTopicConfigurationBuilder {
 	 * @param suffix the suffix.
 	 * @return the builder.
 	 */
-	public RetryTopicConfigurationBuilder dltSuffix(String suffix) {
+	public RetryTopicConfigurationBuilder dltSuffix(@Nullable String suffix) {
 		this.dltSuffix = suffix;
 		return this;
 	}
@@ -238,6 +241,38 @@ public class RetryTopicConfigurationBuilder {
 	 */
 	public RetryTopicConfigurationBuilder setTopicSuffixingStrategy(TopicSuffixingStrategy topicSuffixingStrategy) {
 		this.topicSuffixingStrategy = topicSuffixingStrategy;
+		return this;
+	}
+
+	/**
+	 * Configure the {@link SameIntervalTopicReuseStrategy}.
+	 *
+	 * <p>Note: for fixed backoffs, when this is configured as
+	 * {@link SameIntervalTopicReuseStrategy#SINGLE_TOPIC}, it has precedence over
+	 * the configuration done through
+	 * {@link #useSingleTopicForSameIntervals()}.
+	 * @param sameIntervalTopicReuseStrategy the strategy.
+	 * @return the builder.
+	 * @since 3.0.4
+	 */
+	public RetryTopicConfigurationBuilder sameIntervalTopicReuseStrategy(SameIntervalTopicReuseStrategy sameIntervalTopicReuseStrategy) {
+		this.sameIntervalTopicReuseStrategy = sameIntervalTopicReuseStrategy;
+		return this;
+	}
+
+	/**
+	 * Configure the use of a single retry topic for the attempts that have the same
+	 * backoff interval (as long as these attempts are in the end of the chain).
+	 *
+	 * Used for the last retries of exponential backoff (when a {@code maxDelay} is
+	 * provided), and to use a single retry topic for fixed backoff.
+	 *
+	 * @return the builder.
+	 * @since 3.0.4
+	 * @see SameIntervalTopicReuseStrategy
+	 */
+	public RetryTopicConfigurationBuilder useSingleTopicForSameIntervals() {
+		this.sameIntervalTopicReuseStrategy = SameIntervalTopicReuseStrategy.SINGLE_TOPIC;
 		return this;
 	}
 
@@ -371,27 +406,6 @@ public class RetryTopicConfigurationBuilder {
 		return this;
 	}
 
-	/**
-	 * Configure the use of a single retry topic with fixed delays.
-	 * @return the builder.
-	 * @see FixedDelayStrategy#SINGLE_TOPIC
-	 */
-	public RetryTopicConfigurationBuilder useSingleTopicForFixedDelays() {
-		this.fixedDelayStrategy = FixedDelayStrategy.SINGLE_TOPIC;
-		return this;
-	}
-
-	/**
-	 * Configure the {@link FixedDelayStrategy}; default is
-	 * {@link FixedDelayStrategy#MULTIPLE_TOPICS}.
-	 * @param delayStrategy the delay strategy.
-	 * @return the builder.
-	 */
-	public RetryTopicConfigurationBuilder useSingleTopicForFixedDelays(FixedDelayStrategy delayStrategy) {
-		this.fixedDelayStrategy = delayStrategy;
-		return this;
-	}
-
 	/* ---------------- Configure Topics Auto Creation -------------- */
 
 	/**
@@ -411,14 +425,14 @@ public class RetryTopicConfigurationBuilder {
 	 * broker is version 2.4 or later).
 	 * @return the builder.
 	 */
-	public RetryTopicConfigurationBuilder autoCreateTopicsWith(int numPartitions, short replicationFactor) {
+	public RetryTopicConfigurationBuilder autoCreateTopicsWith(@Nullable Integer numPartitions, @Nullable Short replicationFactor) {
 		this.topicCreationConfiguration = new RetryTopicConfiguration.TopicCreation(true, numPartitions,
 				replicationFactor);
 		return this;
 	}
 
 	/**
-	 * Configure the topic creation behavior to optionall create topics with the provided
+	 * Configure the topic creation behavior to optionally create topics with the provided
 	 * properties.
 	 * @param shouldCreate true to auto create.
 	 * @param numPartitions the number of partitions.
@@ -426,8 +440,8 @@ public class RetryTopicConfigurationBuilder {
 	 * broker is version 2.4 or later).
 	 * @return the builder.
 	 */
-	public RetryTopicConfigurationBuilder autoCreateTopics(boolean shouldCreate, int numPartitions,
-			short replicationFactor) {
+	public RetryTopicConfigurationBuilder autoCreateTopics(@Nullable Boolean shouldCreate, @Nullable Integer numPartitions,
+			@Nullable Short replicationFactor) {
 
 		this.topicCreationConfiguration = new RetryTopicConfiguration.TopicCreation(shouldCreate, numPartitions,
 				replicationFactor);
@@ -524,7 +538,7 @@ public class RetryTopicConfigurationBuilder {
 	 * @param factoryBeanName the factory bean name.
 	 * @return the builder.
 	 */
-	public RetryTopicConfigurationBuilder listenerFactory(String factoryBeanName) {
+	public RetryTopicConfigurationBuilder listenerFactory(@Nullable String factoryBeanName) {
 		this.listenerContainerFactoryName = factoryBeanName;
 		return this;
 	}
@@ -552,8 +566,8 @@ public class RetryTopicConfigurationBuilder {
 		List<DestinationTopic.Properties> destinationTopicProperties =
 				new DestinationTopicPropertiesFactory(this.retryTopicSuffix, this.dltSuffix, backOffValues,
 						buildClassifier(), this.topicCreationConfiguration.getNumPartitions(),
-						sendToTopicKafkaTemplate, this.fixedDelayStrategy, this.dltStrategy,
-						this.topicSuffixingStrategy, this.timeout)
+						sendToTopicKafkaTemplate, this.dltStrategy,
+						this.topicSuffixingStrategy, this.sameIntervalTopicReuseStrategy, this.timeout)
 								.autoStartDltHandler(this.autoStartDltHandler)
 								.createProperties();
 		return new RetryTopicConfiguration(destinationTopicProperties,

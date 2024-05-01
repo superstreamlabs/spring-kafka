@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 the original author or authors.
+ * Copyright 2022-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,12 +39,12 @@ import org.springframework.kafka.listener.MessageListener
 class Application {
     @Bean
     fun runner(factory: ConcurrentKafkaListenerContainerFactory<String, String>): ApplicationRunner {
-        return ApplicationRunner { args: ApplicationArguments? -> createContainer(factory, "topic1", "group1") }
+        return ApplicationRunner { _ : ApplicationArguments? -> createContainer(factory, "topic1", "group1") }
     }
 
     @Bean
     fun runner(applicationContext: ApplicationContext): ApplicationRunner {
-        return ApplicationRunner { args: ApplicationArguments? ->
+        return ApplicationRunner { _: ApplicationArguments? ->
 // tag::getBeans[]
 
 applicationContext.getBean(MyPojo::class.java, "one", arrayOf("topic2"))

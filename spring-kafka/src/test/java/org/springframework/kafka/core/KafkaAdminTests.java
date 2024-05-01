@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2022 the original author or authors.
+ * Copyright 2017-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,10 @@
 package org.springframework.kafka.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.mock;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -36,11 +39,13 @@ import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.AlterConfigOp;
 import org.apache.kafka.clients.admin.AlterConfigOp.OpType;
 import org.apache.kafka.clients.admin.ConfigEntry;
+import org.apache.kafka.clients.admin.DescribeClusterResult;
 import org.apache.kafka.clients.admin.DescribeConfigsResult;
 import org.apache.kafka.clients.admin.DescribeTopicsResult;
 import org.apache.kafka.clients.admin.NewPartitions;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.config.ConfigResource.Type;
 import org.apache.kafka.common.config.TopicConfig;
@@ -54,10 +59,10 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.KafkaAdmin.NewTopics;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
+import org.springframework.kafka.test.EmbeddedKafkaZKBroker;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import org.springframework.util.ReflectionUtils;
-import org.springframework.util.StringUtils;
 
 /**
  * @author Gary Russell
@@ -85,6 +90,9 @@ public class KafkaAdminTests {
 	@Autowired
 	private NewTopic mismatchconfig;
 
+	@Autowired
+	private NewTopic dontCreateThisOne;
+
 	@Test
 	public void testTopicConfigs() {
 		assertThat(topic1.configs()).containsEntry(
@@ -97,6 +105,7 @@ public class KafkaAdminTests {
 					.replicas(3)
 					.build().replicationFactor()).isEqualTo((short) 3);
 		assertThat(topic3.replicasAssignments()).hasSize(3);
+		assertThat(admin.newTopics()).doesNotContain(this.dontCreateThisOne);
 	}
 
 	@Test
@@ -172,6 +181,15 @@ public class KafkaAdminTests {
 					&& configResourceConfigMap.get(new ConfigResource(Type.TOPIC, "noConfigAddLater"))
 					.get("retention.ms").value().equals("1000");
 		});
+
+		assertThatIllegalStateException().isThrownBy(() -> this.admin.createOrModifyTopics(mismatchconfig,
+				TopicBuilder.name("noConfigAddLater")
+						.partitions(2)
+						.replicas(1)
+						.config("no.such.config.key", "1000")
+						.build()))
+				.withMessageContaining("no.such.config.key");
+
 	}
 
 	@Test
@@ -254,12 +272,30 @@ public class KafkaAdminTests {
 				.isEqualTo("a,b,c");
 	}
 
+	@Test
+	void nullClusterId() {
+		AdminClient mock = mock(AdminClient.class);
+		DescribeClusterResult result = mock(DescribeClusterResult.class);
+		KafkaFuture<String> fut = KafkaFuture.completedFuture(null);
+		given(result.clusterId()).willReturn(fut);
+		given(mock.describeCluster()).willReturn(result);
+		KafkaAdmin admin = new KafkaAdmin(Map.of()) {
+
+			@Override
+			AdminClient createAdmin() {
+				return mock;
+			}
+
+		};
+		assertThat(admin.clusterId()).isEqualTo("null");
+	}
+
 	@Configuration
 	public static class Config {
 
 		@Bean
 		public EmbeddedKafkaBroker kafkaEmbedded() {
-			return new EmbeddedKafkaBroker(3)
+			return new EmbeddedKafkaZKBroker(3)
 					.brokerProperty("default.replication.factor", 2);
 		}
 
@@ -267,16 +303,15 @@ public class KafkaAdminTests {
 		public KafkaAdmin admin() {
 			Map<String, Object> configs = new HashMap<>();
 			KafkaAdmin admin = new KafkaAdmin(configs);
-			admin.setBootstrapServersSupplier(() ->
-					StringUtils.arrayToCommaDelimitedString(kafkaEmbedded().getBrokerAddresses()));
+			admin.setBootstrapServersSupplier(() -> kafkaEmbedded().getBrokersAsString());
+			admin.setCreateOrModifyTopic(nt -> !nt.name().equals("dontCreate"));
 			return admin;
 		}
 
 		@Bean
 		public AdminClient adminClient() {
 			Map<String, Object> configs = new HashMap<>();
-			configs.put(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG,
-					StringUtils.arrayToCommaDelimitedString(kafkaEmbedded().getBrokerAddresses()));
+			configs.put(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG, kafkaEmbedded().getBrokersAsString());
 			return AdminClient.create(configs);
 		}
 
@@ -336,6 +371,11 @@ public class KafkaAdminTests {
 					TopicBuilder.name("optRepl")
 						.partitions(3)
 						.build());
+		}
+
+		@Bean
+		NewTopic dontCreateThisOne() {
+			return TopicBuilder.name("dontCreate").build();
 		}
 
 	}

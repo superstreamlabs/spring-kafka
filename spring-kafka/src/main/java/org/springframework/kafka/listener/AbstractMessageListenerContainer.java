@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2022 the original author or authors.
+ * Copyright 2016-2024 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,10 +21,13 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -46,6 +49,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.ApplicationEventPublisherAware;
 import org.springframework.core.log.LogAccessor;
 import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.event.ContainerStoppedEvent;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.kafka.support.TopicPartitionOffset;
@@ -64,12 +68,11 @@ import org.springframework.util.StringUtils;
  * @author Marius Bogoevici
  * @author Artem Bilan
  * @author Tomaz Fernandes
+ * @author Soby Chacko
  */
 public abstract class AbstractMessageListenerContainer<K, V>
 		implements GenericMessageListenerContainer<K, V>, BeanNameAware, ApplicationEventPublisherAware,
 			ApplicationContextAware {
-
-	private static final String VERSION_2_8 = "2.8";
 
 	/**
 	 * The default {@link org.springframework.context.SmartLifecycle} phase for listener
@@ -81,11 +84,14 @@ public abstract class AbstractMessageListenerContainer<K, V>
 
 	protected final LogAccessor logger = new LogAccessor(LogFactory.getLog(this.getClass())); // NOSONAR
 
+	@NonNull
 	protected final ConsumerFactory<K, V> consumerFactory; // NOSONAR (final)
 
 	private final ContainerProperties containerProperties;
 
-	protected final Object lifecycleMonitor = new Object(); // NOSONAR
+	protected final ReentrantLock lifecycleLock = new ReentrantLock(); // NOSONAR
+
+	protected final AtomicBoolean enforceRebalanceRequested = new AtomicBoolean();
 
 	private final Set<TopicPartition> pauseRequestedPartitions = ConcurrentHashMap.newKeySet();
 
@@ -93,9 +99,6 @@ public abstract class AbstractMessageListenerContainer<K, V>
 	private String beanName = "noBeanNameSet";
 
 	private ApplicationEventPublisher applicationEventPublisher;
-
-	@SuppressWarnings("deprecation")
-	private GenericErrorHandler<?> errorHandler;
 
 	private CommonErrorHandler commonErrorHandler;
 
@@ -131,6 +134,10 @@ public abstract class AbstractMessageListenerContainer<K, V>
 
 	@NonNull
 	private Function<MessageListenerContainer, String> threadNameSupplier = container -> container.getListenerId();
+
+	@Nullable
+	private KafkaAdmin kafkaAdmin;
+
 
 	/**
 	 * Construct an instance with the provided factory and properties.
@@ -221,55 +228,6 @@ public abstract class AbstractMessageListenerContainer<K, V>
 	}
 
 	/**
-	 * Set the error handler to call when the listener throws an exception.
-	 * @param errorHandler the error handler.
-	 * @since 2.2
-	 * @deprecated in favor of {@link #setCommonErrorHandler(CommonErrorHandler)}
-	 * @see #setCommonErrorHandler(CommonErrorHandler)
-	 */
-	@Deprecated(since = VERSION_2_8, forRemoval = true) // in 3.1
-	public void setErrorHandler(ErrorHandler errorHandler) {
-		this.errorHandler = errorHandler;
-	}
-
-	/**
-	 * Set the error handler to call when the listener throws an exception.
-	 * @param errorHandler the error handler.
-	 * @since 2.2
-	 * @deprecated in favor of {@link #setCommonErrorHandler(CommonErrorHandler)}
-	 * @see #setCommonErrorHandler(CommonErrorHandler)
-	 */
-	@Deprecated(since = VERSION_2_8, forRemoval = true) // in 3.1
-	public void setGenericErrorHandler(@Nullable GenericErrorHandler<?> errorHandler) {
-		this.errorHandler = errorHandler;
-	}
-
-	/**
-	 * Set the batch error handler to call when the listener throws an exception.
-	 * @param errorHandler the error handler.
-	 * @since 2.2
-	 * @deprecated in favor of {@link #setCommonErrorHandler(CommonErrorHandler)}
-	 * @see #setCommonErrorHandler(CommonErrorHandler)
-	 */
-	@Deprecated(since = VERSION_2_8, forRemoval = true) // in 3.1
-	public void setBatchErrorHandler(BatchErrorHandler errorHandler) {
-		this.errorHandler = errorHandler;
-	}
-
-	/**
-	 * Get the configured error handler.
-	 * @return the error handler.
-	 * @since 2.2
-	 * @deprecated in favor of {@link #getCommonErrorHandler()}
-	 * @see #getCommonErrorHandler()
-	 */
-	@Deprecated(since = VERSION_2_8, forRemoval = true) // in 3.1
-	@Nullable
-	public GenericErrorHandler<?> getGenericErrorHandler() {
-		return this.errorHandler;
-	}
-
-	/**
 	 * Get the {@link CommonErrorHandler}.
 	 * @return the handler.
 	 * @since 2.8
@@ -281,7 +239,7 @@ public abstract class AbstractMessageListenerContainer<K, V>
 
 	/**
 	 * Set the {@link CommonErrorHandler} which can handle errors for both record
-	 * and batch listeners. Replaces the use of {@link GenericErrorHandler}s.
+	 * and batch listeners.
 	 * @param commonErrorHandler the handler.
 	 * @since 2.8
 	 */
@@ -471,6 +429,26 @@ public abstract class AbstractMessageListenerContainer<K, V>
 		this.threadNameSupplier = threadNameSupplier;
 	}
 
+	/**
+	 * Return the {@link KafkaAdmin}, used to find the cluster id for observation, if
+	 * present.
+	 * @return the kafkaAdmin
+	 * @since 3.0.5
+	 */
+	@Nullable
+	public KafkaAdmin getKafkaAdmin() {
+		return this.kafkaAdmin;
+	}
+
+	/**
+	 * Set the {@link KafkaAdmin}, used to find the cluster id for observation, if
+	 * present.
+	 * @param kafkaAdmin the admin.
+	 */
+	public void setKafkaAdmin(KafkaAdmin kafkaAdmin) {
+		this.kafkaAdmin = kafkaAdmin;
+	}
+
 	protected RecordInterceptor<K, V> getRecordInterceptor() {
 		return this.recordInterceptor;
 	}
@@ -524,12 +502,16 @@ public abstract class AbstractMessageListenerContainer<K, V>
 	@Override
 	public final void start() {
 		checkGroupId();
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			if (!isRunning()) {
 				Assert.state(this.containerProperties.getMessageListener() instanceof GenericMessageListener,
 						() -> "A " + GenericMessageListener.class.getName() + " implementation must be provided");
 				doStart();
 			}
+		}
+		finally {
+			this.lifecycleLock.unlock();
 		}
 	}
 
@@ -540,6 +522,12 @@ public abstract class AbstractMessageListenerContainer<K, V>
 					.stream()
 					.filter(entry -> AdminClientConfig.configNames().contains(entry.getKey()))
 					.collect(Collectors.toMap(Entry::getKey, Entry::getValue));
+			Properties overrides = propertiesFromConsumerPropertyOverrides();
+			overrides.forEach((key, value) -> {
+				if (key instanceof String) {
+					configs.put((String) key, value);
+				}
+			});
 			List<String> missing = null;
 			try (AdminClient client = AdminClient.create(configs)) { // NOSONAR - false positive null check
 				if (client != null) {
@@ -610,7 +598,8 @@ public abstract class AbstractMessageListenerContainer<K, V>
 	 * @since 2.3.8
 	 */
 	public final void stop(boolean wait) {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			if (isRunning()) {
 				if (wait) {
 					final CountDownLatch latch = new CountDownLatch(1);
@@ -628,6 +617,9 @@ public abstract class AbstractMessageListenerContainer<K, V>
 				}
 			}
 		}
+		finally {
+			this.lifecycleLock.unlock();
+		}
 	}
 
 	@Override
@@ -642,13 +634,17 @@ public abstract class AbstractMessageListenerContainer<K, V>
 
 	@Override
 	public void stop(Runnable callback) {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			if (isRunning()) {
 				doStop(callback);
 			}
 			else {
 				callback.run();
 			}
+		}
+		finally {
+			this.lifecycleLock.unlock();
 		}
 	}
 
@@ -713,6 +709,25 @@ public abstract class AbstractMessageListenerContainer<K, V>
 	 */
 	protected AbstractMessageListenerContainer<?, ?> parentOrThis() {
 		return this;
+	}
+
+	/**
+	 * Make any default consumer override properties explicit properties.
+	 * @return the properties.
+	 * @since 2.9.11
+	 */
+	protected Properties propertiesFromConsumerPropertyOverrides() {
+		Properties propertyOverrides = this.containerProperties.getKafkaConsumerProperties();
+		Properties props = new Properties();
+		props.putAll(propertyOverrides);
+		Set<String> stringPropertyNames = propertyOverrides.stringPropertyNames();
+		// User might have provided properties as defaults
+		stringPropertyNames.forEach((name) -> {
+			if (!props.contains(name)) {
+				props.setProperty(name, propertyOverrides.getProperty(name));
+			}
+		});
+		return props;
 	}
 
 }

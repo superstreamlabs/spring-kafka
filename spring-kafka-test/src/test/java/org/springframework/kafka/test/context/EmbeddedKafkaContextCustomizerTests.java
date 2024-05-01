@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2020 the original author or authors.
+ * Copyright 2017-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,21 +17,15 @@
 package org.springframework.kafka.test.context;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.BDDMockito.given;
-import static org.mockito.Mockito.mock;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import org.springframework.beans.BeansException;
-import org.springframework.beans.factory.DisposableBean;
-import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
-import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
-
 
 /**
  * @author Oleg Artyomov
@@ -75,15 +69,14 @@ public class EmbeddedKafkaContextCustomizerTests {
 		EmbeddedKafka annotationWithPorts =
 				AnnotationUtils.findAnnotation(TestWithEmbeddedKafkaPorts.class, EmbeddedKafka.class);
 		EmbeddedKafkaContextCustomizer customizer = new EmbeddedKafkaContextCustomizer(annotationWithPorts);
-		ConfigurableApplicationContext context = mock(ConfigurableApplicationContext.class);
-		BeanFactoryStub factoryStub = new BeanFactoryStub();
-		given(context.getBeanFactory()).willReturn(factoryStub);
-		given(context.getEnvironment()).willReturn(mock(ConfigurableEnvironment.class));
+		ConfigurableApplicationContext context = new GenericApplicationContext();
 		customizer.customizeContext(context, null);
+		context.refresh();
 
-		assertThat(factoryStub.getBroker().getBrokersAsString())
+		EmbeddedKafkaBroker embeddedKafkaBroker = context.getBean(EmbeddedKafkaBroker.class);
+		assertThat(embeddedKafkaBroker.getBrokersAsString())
 				.isEqualTo("127.0.0.1:" + annotationWithPorts.ports()[0]);
-		assertThat(KafkaTestUtils.getPropertyValue(factoryStub.getBroker(), "brokerListProperty"))
+		assertThat(KafkaTestUtils.getPropertyValue(embeddedKafkaBroker, "brokerListProperty"))
 				.isEqualTo("my.bss.prop");
 	}
 
@@ -92,60 +85,32 @@ public class EmbeddedKafkaContextCustomizerTests {
 		EmbeddedKafka annotationWithPorts =
 				AnnotationUtils.findAnnotation(TestWithEmbeddedKafkaMulti.class, EmbeddedKafka.class);
 		EmbeddedKafkaContextCustomizer customizer = new EmbeddedKafkaContextCustomizer(annotationWithPorts);
-		ConfigurableApplicationContext context = mock(ConfigurableApplicationContext.class);
-		BeanFactoryStub factoryStub = new BeanFactoryStub();
-		given(context.getBeanFactory()).willReturn(factoryStub);
-		given(context.getEnvironment()).willReturn(mock(ConfigurableEnvironment.class));
+		ConfigurableApplicationContext context = new GenericApplicationContext();
 		customizer.customizeContext(context, null);
+		context.refresh();
 
-		assertThat(factoryStub.getBroker().getBrokersAsString())
-			.matches("127.0.0.1:[0-9]+,127.0.0.1:[0-9]+");
+		assertThat(context.getBean(EmbeddedKafkaBroker.class).getBrokersAsString())
+				.matches("127.0.0.1:[0-9]+,127.0.0.1:[0-9]+");
 	}
 
 
-	@EmbeddedKafka
-	private class TestWithEmbeddedKafka {
+	@EmbeddedKafka(kraft = false)
+	private static final class TestWithEmbeddedKafka {
 
 	}
 
-	@EmbeddedKafka
-	private class SecondTestWithEmbeddedKafka {
+	@EmbeddedKafka(kraft = false)
+	private static final class SecondTestWithEmbeddedKafka {
 
 	}
 
-	@EmbeddedKafka(ports = 8085, bootstrapServersProperty = "my.bss.prop")
-	private class TestWithEmbeddedKafkaPorts {
+	@EmbeddedKafka(kraft = false, ports = 8085, bootstrapServersProperty = "my.bss.prop")
+	private static final class TestWithEmbeddedKafkaPorts {
 
 	}
 
-	@EmbeddedKafka(count = 2)
-	private class TestWithEmbeddedKafkaMulti {
-
-	}
-	@SuppressWarnings("serial")
-	private class BeanFactoryStub extends DefaultListableBeanFactory {
-
-		private Object bean;
-
-		public EmbeddedKafkaBroker getBroker() {
-			return (EmbeddedKafkaBroker) bean;
-		}
-
-		@Override
-		public Object initializeBean(Object existingBean, String beanName) throws BeansException {
-			this.bean = existingBean;
-			return bean;
-		}
-
-		@Override
-		public void registerSingleton(String beanName, Object singletonObject) {
-
-		}
-
-		@Override
-		public void registerDisposableBean(String beanName, DisposableBean bean) {
-
-		}
+	@EmbeddedKafka(kraft = false, count = 2)
+	private static final class TestWithEmbeddedKafkaMulti {
 
 	}
 

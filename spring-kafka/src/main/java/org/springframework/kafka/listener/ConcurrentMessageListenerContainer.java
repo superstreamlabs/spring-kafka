@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2022 the original author or authors.
+ * Copyright 2015-2024 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.event.ConsumerStoppedEvent.Reason;
 import org.springframework.kafka.support.TopicPartitionOffset;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
@@ -64,9 +65,13 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 
 	private final List<AsyncTaskExecutor> executors = new ArrayList<>();
 
+	private final AtomicInteger stoppedContainers = new AtomicInteger();
+
 	private int concurrency = 1;
 
 	private boolean alwaysClientIdSuffix = true;
+
+	private volatile Reason reason;
 
 	/**
 	 * Construct an instance with the supplied configuration properties.
@@ -113,14 +118,19 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 	 * this container.
 	 */
 	public List<KafkaMessageListenerContainer<K, V>> getContainers() {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			return Collections.unmodifiableList(new ArrayList<>(this.containers));
 		}
-	}
+		finally {
+			this.lifecycleLock.unlock();
+		}
+}
 
 	@Override
 	public MessageListenerContainer getContainerFor(String topic, int partition) {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			for (KafkaMessageListenerContainer<K, V> container : this.containers) {
 				Collection<TopicPartition> assignedPartitions = container.getAssignedPartitions();
 				if (assignedPartitions != null) {
@@ -133,22 +143,30 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 			}
 			return this;
 		}
+		finally {
+			this.lifecycleLock.unlock();
+		}
 	}
 
 	@Override
 	public Collection<TopicPartition> getAssignedPartitions() {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			return this.containers.stream()
 					.map(KafkaMessageListenerContainer::getAssignedPartitions)
 					.filter(Objects::nonNull)
 					.flatMap(Collection::stream)
 					.collect(Collectors.toList());
 		}
+		finally {
+			this.lifecycleLock.unlock();
+		}
 	}
 
 	@Override
 	public Map<String, Collection<TopicPartition>> getAssignmentsByClientId() {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			Map<String, Collection<TopicPartition>> assignments = new HashMap<>();
 			this.containers.forEach(container -> {
 				Map<String, Collection<TopicPartition>> byClientId = container.getAssignmentsByClientId();
@@ -158,11 +176,15 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 			});
 			return assignments;
 		}
+		finally {
+			this.lifecycleLock.unlock();
+		}
 	}
 
 	@Override
 	public boolean isContainerPaused() {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			boolean paused = isPaused();
 			if (paused) {
 				for (AbstractMessageListenerContainer<K, V> container : this.containers) {
@@ -172,6 +194,9 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 				}
 			}
 			return paused;
+		}
+		finally {
+			this.lifecycleLock.unlock();
 		}
 	}
 
@@ -190,12 +215,16 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 
 	@Override
 	public Map<String, Map<MetricName, ? extends Metric>> metrics() {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			Map<String, Map<MetricName, ? extends Metric>> metrics = new HashMap<>();
 			for (KafkaMessageListenerContainer<K, V> container : this.containers) {
 				metrics.putAll(container.metrics());
 			}
 			return Collections.unmodifiableMap(metrics);
+		}
+		finally {
+			this.lifecycleLock.unlock();
 		}
 	}
 
@@ -243,7 +272,6 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 			container.setApplicationEventPublisher(publisher);
 		}
 		container.setClientIdSuffix(this.concurrency > 1 || this.alwaysClientIdSuffix ? "-" + index : "");
-		container.setGenericErrorHandler(getGenericErrorHandler());
 		container.setCommonErrorHandler(getCommonErrorHandler());
 		container.setAfterRollbackProcessor(getAfterRollbackProcessor());
 		container.setRecordInterceptor(getRecordInterceptor());
@@ -344,58 +372,117 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 	}
 
 	@Override
+	public void childStopped(MessageListenerContainer child, Reason reason) {
+		if (this.reason == null || reason.equals(Reason.AUTH)) {
+			this.reason = reason;
+		}
+		if (Reason.AUTH.equals(this.reason)
+				&& getContainerProperties().isRestartAfterAuthExceptions()
+				&& this.concurrency == this.stoppedContainers.incrementAndGet()) {
+
+			this.reason = null;
+			this.stoppedContainers.set(0);
+
+			// This has to run on another thread to avoid a deadlock on lifecycleMonitor
+			AsyncTaskExecutor exec = getContainerProperties().getListenerTaskExecutor();
+			if (exec == null) {
+				exec = new SimpleAsyncTaskExecutor(getListenerId() + ".authRestart");
+			}
+			exec.execute(() -> start());
+		}
+	}
+
+	@Override
+	public void enforceRebalance() {
+		this.lifecycleLock.lock();
+		try {
+			// Since the rebalance is for the whole consumer group, there is no need to
+			// initiate this operation for every single container in the group.
+			final KafkaMessageListenerContainer<K, V> listenerContainer = this.containers.get(0);
+			listenerContainer.enforceRebalance();
+		}
+		finally {
+			this.lifecycleLock.unlock();
+		}
+	}
+
+	@Override
 	public void pause() {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			super.pause();
 			this.containers.forEach(AbstractMessageListenerContainer::pause);
+		}
+		finally {
+			this.lifecycleLock.unlock();
 		}
 	}
 
 	@Override
 	public void resume() {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			super.resume();
 			this.containers.forEach(AbstractMessageListenerContainer::resume);
+		}
+		finally {
+			this.lifecycleLock.unlock();
 		}
 	}
 
 	@Override
 	public void pausePartition(TopicPartition topicPartition) {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			this.containers
 					.stream()
 					.filter(container -> containsPartition(topicPartition, container))
 					.forEach(container -> container.pausePartition(topicPartition));
 		}
+		finally {
+			this.lifecycleLock.unlock();
+		}
 	}
 
 	@Override
 	public void resumePartition(TopicPartition topicPartition) {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			this.containers
 					.stream()
-					.filter(container -> containsPartition(topicPartition, container))
+					.filter(container -> container.isPartitionPauseRequested(topicPartition))
 					.forEach(container -> container.resumePartition(topicPartition));
+		}
+		finally {
+			this.lifecycleLock.unlock();
 		}
 	}
 
 	@Override
 	public boolean isPartitionPaused(TopicPartition topicPartition) {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			return this
 					.containers
 					.stream()
 					.anyMatch(container -> container.isPartitionPaused(topicPartition));
 		}
+		finally {
+			this.lifecycleLock.unlock();
+		}
 	}
 
 	@Override
 	public boolean isInExpectedState() {
-		synchronized (this.lifecycleMonitor) {
+		this.lifecycleLock.lock();
+		try {
 			return (isRunning() || isStoppedNormally()) && this.containers
 					.stream()
 					.map(container -> container.isInExpectedState())
 					.allMatch(bool -> Boolean.TRUE.equals(bool));
+		}
+		finally {
+			this.lifecycleLock.unlock();
 		}
 	}
 

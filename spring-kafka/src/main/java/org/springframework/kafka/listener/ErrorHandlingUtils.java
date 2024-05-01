@@ -1,5 +1,5 @@
 /*
- * Copyright 2021-2022 the original author or authors.
+ * Copyright 2021-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,18 +18,28 @@ package org.springframework.kafka.listener;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.WakeupException;
 
 import org.springframework.classify.BinaryExceptionClassifier;
 import org.springframework.core.log.LogAccessor;
 import org.springframework.kafka.KafkaException;
+import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.support.KafkaUtils;
+import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
+import org.springframework.lang.Nullable;
+import org.springframework.util.ClassUtils;
 import org.springframework.util.backoff.BackOff;
 import org.springframework.util.backoff.BackOffExecution;
 
@@ -37,10 +47,14 @@ import org.springframework.util.backoff.BackOffExecution;
  * Utilities for error handling.
  *
  * @author Gary Russell
+ * @author Andrii Pelesh
+ * @author Antonio Tomac
  * @since 2.8
  *
  */
 public final class ErrorHandlingUtils {
+
+	static Runnable NO_OP = () -> { };
 
 	private ErrorHandlingUtils() {
 	}
@@ -61,12 +75,15 @@ public final class ErrorHandlingUtils {
 	 * @param logLevel the log level.
 	 * @param retryListeners the retry listeners.
 	 * @param classifier the exception classifier.
-	 * @since 2.8.11
+	 * @param reClassifyOnExceptionChange true to reset the state if a different exception
+	 * is thrown during retry.
+	 * @since 2.9.7
 	 */
 	public static void retryBatch(Exception thrownException, ConsumerRecords<?, ?> records, Consumer<?, ?> consumer,
 			MessageListenerContainer container, Runnable invokeListener, BackOff backOff,
 			CommonErrorHandler seeker, BiConsumer<ConsumerRecords<?, ?>, Exception> recoverer, LogAccessor logger,
-			KafkaException.Level logLevel, List<RetryListener> retryListeners, BinaryExceptionClassifier classifier) {
+			KafkaException.Level logLevel, List<RetryListener> retryListeners, BinaryExceptionClassifier classifier,
+			boolean reClassifyOnExceptionChange) {
 
 		BackOffExecution execution = backOff.start();
 		long nextBackOff = execution.nextBackOff();
@@ -77,24 +94,48 @@ public final class ErrorHandlingUtils {
 		listen(retryListeners, records, thrownException, attempt++);
 		ConsumerRecord<?, ?> first = records.iterator().next();
 		MessageListenerContainer childOrSingle = container.getContainerFor(first.topic(), first.partition());
-		if (childOrSingle instanceof ConsumerPauseResumeEventPublisher) {
-			((ConsumerPauseResumeEventPublisher) childOrSingle)
-					.publishConsumerPausedEvent(assignment, "For batch retry");
+		if (childOrSingle instanceof ConsumerPauseResumeEventPublisher consumerPauseResumeEventPublisher) {
+			consumerPauseResumeEventPublisher.publishConsumerPausedEvent(assignment, "For batch retry");
 		}
 		try {
-			Boolean retryable = classifier.classify(unwrapIfNeeded(thrownException));
+			Exception recoveryException = thrownException;
+			Exception lastException = unwrapIfNeeded(thrownException);
+			Boolean retryable = classifier.classify(lastException);
 			while (Boolean.TRUE.equals(retryable) && nextBackOff != BackOffExecution.STOP) {
-				consumer.poll(Duration.ZERO);
 				try {
-					ListenerUtils.stoppableSleep(container, nextBackOff);
+					consumer.poll(Duration.ZERO);
+				}
+				catch (WakeupException we) {
+					seeker.handleBatch(thrownException, records, consumer, container, NO_OP);
+					throw new KafkaException("Woken up during retry", logLevel, we);
+				}
+				try {
+					ListenerUtils.conditionalSleep(
+							() -> container.isRunning() &&
+									!container.isPauseRequested() &&
+									records.partitions().stream().noneMatch(container::isPartitionPauseRequested),
+							nextBackOff
+					);
 				}
 				catch (InterruptedException e1) {
 					Thread.currentThread().interrupt();
-					seeker.handleBatch(thrownException, records, consumer, container, () -> { });
+					seeker.handleBatch(thrownException, records, consumer, container, NO_OP);
 					throw new KafkaException("Interrupted during retry", logLevel, e1);
 				}
 				if (!container.isRunning()) {
 					throw new KafkaException("Container stopped during retries");
+				}
+				if (container.isPauseRequested() ||
+						records.partitions().stream().anyMatch(container::isPartitionPauseRequested)) {
+					seeker.handleBatch(thrownException, records, consumer, container, NO_OP);
+					throw new KafkaException("Container paused requested during retries");
+				}
+				try {
+					consumer.poll(Duration.ZERO);
+				}
+				catch (WakeupException we) {
+					seeker.handleBatch(thrownException, records, consumer, container, NO_OP);
+					throw new KafkaException("Woken up during retry", logLevel, we);
 				}
 				try {
 					invokeListener.run();
@@ -107,27 +148,35 @@ public final class ErrorHandlingUtils {
 					}
 					String toLog = failed;
 					logger.debug(ex, () -> "Retry failed for: " + toLog);
+					recoveryException = ex;
+					Exception newException = unwrapIfNeeded(ex);
+					if (reClassifyOnExceptionChange && !newException.getClass().equals(lastException.getClass())
+							&& !classifier.classify(newException)) {
+
+						break;
+					}
 				}
 				nextBackOff = execution.nextBackOff();
 			}
 			try {
-				recoverer.accept(records, thrownException);
-				retryListeners.forEach(listener -> listener.recovered(records, thrownException));
+				recoverer.accept(records, recoveryException);
+				final Exception finalRecoveryException = recoveryException;
+				retryListeners.forEach(listener -> listener.recovered(records, finalRecoveryException));
 			}
 			catch (Exception ex) {
-				logger.error(ex, () -> "Recoverer threw an exception; re-seeking batch");
+				logger.error(ex, "Recoverer threw an exception; re-seeking batch");
 				retryListeners.forEach(listener -> listener.recoveryFailed(records, thrownException, ex));
-				seeker.handleBatch(thrownException, records, consumer, container, () -> { });
+				seeker.handleBatch(thrownException, records, consumer, container, NO_OP);
 			}
 		}
 		finally {
 			Set<TopicPartition> assignment2 = consumer.assignment();
 			consumer.resume(assignment2);
-			if (childOrSingle instanceof ConsumerPauseResumeEventPublisher) {
-				((ConsumerPauseResumeEventPublisher) childOrSingle).publishConsumerResumedEvent(assignment2);
+			if (childOrSingle instanceof ConsumerPauseResumeEventPublisher consumerPauseResumeEventPublisher) {
+				consumerPauseResumeEventPublisher.publishConsumerResumedEvent(assignment2);
 			}
 		}
-	}
+	} // NOSONAR NCSS line count
 
 	private static void listen(List<RetryListener> listeners, ConsumerRecords<?, ?> records,
 			Exception thrownException, int attempt) {
@@ -141,12 +190,9 @@ public final class ErrorHandlingUtils {
 	 * @return the String.
 	 */
 	public static String recordsToString(ConsumerRecords<?, ?> records) {
-		StringBuffer sb = new StringBuffer();
-		records.spliterator().forEachRemaining(rec -> sb
-				.append(KafkaUtils.format(rec))
-				.append(','));
-		sb.deleteCharAt(sb.length() - 1);
-		return sb.toString();
+		return StreamSupport.stream(records.spliterator(), false)
+				.map(KafkaUtils::format)
+				.collect(Collectors.joining(","));
 	}
 
 	/**
@@ -165,6 +211,83 @@ public final class ErrorHandlingUtils {
 			theEx = cause;
 		}
 		return theEx;
+	}
+
+	/**
+	 * Find the root cause, ignoring any {@link ListenerExecutionFailedException} and
+	 * {@link TimestampedException}.
+	 * @param exception the exception to examine.
+	 * @return the root cause.
+	 * @since 3.0.7
+	 */
+	public static Exception findRootCause(Exception exception) {
+		Exception realException = exception;
+		while ((realException  instanceof ListenerExecutionFailedException
+				|| realException instanceof TimestampedException)
+						&& realException.getCause() instanceof Exception cause) {
+
+			realException = cause;
+		}
+		return realException;
+	}
+
+	/**
+	 * Determine whether the key or value deserializer is an instance of
+	 * {@link ErrorHandlingDeserializer}.
+	 * @param <K> the key type.
+	 * @param <V> the value type.
+	 * @param consumerFactory the consumer factory.
+	 * @param consumerOverrides consumer factory property overrides.
+	 * @param isValue true to find the value deserializer.
+	 * @param classLoader the class loader to load the deserializer class.
+	 * @return true if the deserializer is an instance of
+	 * {@link ErrorHandlingDeserializer}.
+	 * @since 3.0.10
+	 */
+	public static <K, V> boolean checkDeserializer(ConsumerFactory<K, V> consumerFactory,
+			Properties consumerOverrides, boolean isValue, ClassLoader classLoader) {
+
+		Object deser = findDeserializerClass(consumerFactory, consumerOverrides, isValue);
+		Class<?> deserializer = null;
+		if (deser instanceof Class<?> deserClass) {
+			deserializer = deserClass;
+		}
+		else if (deser instanceof String str) {
+			try {
+				deserializer = ClassUtils.forName(str, classLoader);
+			}
+			catch (ClassNotFoundException | LinkageError e) {
+				throw new IllegalStateException(e);
+			}
+		}
+		else if (deser != null) {
+			throw new IllegalStateException("Deserializer must be a class or class name, not a " + deser.getClass());
+		}
+		return deserializer != null && ErrorHandlingDeserializer.class.isAssignableFrom(deserializer);
+	}
+
+	@Nullable
+	private static <K, V> Object findDeserializerClass(ConsumerFactory<K, V> consumerFactory,
+			Properties consumerOverrides, boolean isValue) {
+
+		Map<String, Object> props = consumerFactory.getConfigurationProperties();
+		Object configuredDeserializer = isValue
+				? consumerFactory.getValueDeserializer()
+				: consumerFactory.getKeyDeserializer();
+		if (configuredDeserializer == null) {
+			Object deser = consumerOverrides.get(isValue
+					? ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG
+					: ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG);
+			if (deser == null) {
+				deser = props.get(isValue
+						? ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG
+						: ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG);
+			}
+			return deser;
+		}
+		else {
+			return configuredDeserializer.getClass();
+		}
 	}
 
 }

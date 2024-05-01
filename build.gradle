@@ -1,6 +1,6 @@
 buildscript {
-	ext.kotlinVersion = '1.7.20'
-	ext.isCI = System.getenv('GITHUB_ACTION') || System.getenv('bamboo_buildKey')
+	ext.kotlinVersion = '1.9.22'
+	ext.isCI = System.getenv('GITHUB_ACTION')
 	repositories {
 		mavenCentral()
 		gradlePluginPortal()
@@ -19,23 +19,12 @@ plugins {
 	id 'base'
 	id 'project-report'
 	id 'idea'
-	id 'org.sonarqube' version '2.8'
-	id 'org.ajoberstar.grgit' version '4.0.1' apply false
-	id 'io.spring.nohttp' version '0.0.5.RELEASE'
-	id 'io.spring.dependency-management' version '1.0.10.RELEASE' apply false
-	id 'com.jfrog.artifactory' version '4.18.2' apply false
-	id 'org.asciidoctor.jvm.pdf' version '3.3.2'
-	id 'org.asciidoctor.jvm.gems' version '3.3.2'
-	id 'org.asciidoctor.jvm.convert' version '3.3.2'
+	id 'org.ajoberstar.grgit' version '4.1.1'
+	id 'io.spring.nohttp' version '0.0.11'
+	id 'io.spring.dependency-management' version '1.1.4' apply false
 }
 
 apply plugin: 'io.spring.nohttp'
-
-def gitPresent = new File('.git').exists()
-
-if(gitPresent) {
-	apply plugin: 'org.ajoberstar.grgit'
-}
 
 description = 'Spring for Apache Kafka'
 
@@ -46,10 +35,9 @@ ext {
 	linkScmUrl = 'https://github.com/spring-projects/spring-kafka'
 	linkScmConnection = 'https://github.com/spring-projects/spring-kafka.git'
 	linkScmDevConnection = 'git@github.com:spring-projects/spring-kafka.git'
-	springAsciidoctorBackendsVersion = '0.0.3'
 	mavenUrl = project.hasProperty('mavenUrl') ? project.mavenUrl : ''
 	skipSigning = project.hasProperty('skipSigning') && skipSigning.toBoolean()
-	shouldSign = !skipSigning && !version.endsWith("SNAPSHOT")
+	shouldSign = !skipSigning && !version.endsWith("SNAPSHOT")	
 
 	javadocLinks = [
 		'https://docs.oracle.com/en/java/javase/17/docs/api/',
@@ -57,43 +45,46 @@ ext {
 	] as String[]
 
 
-	if (gitPresent) {
-		modifiedFiles =
-			files(grgit.status().unstaged.modified).filter{ f -> f.name.endsWith('.java') || f.name.endsWith('.kt') }
-	}
+	modifiedFiles =
+			files()
+					.from {
+						files(grgit.status().unstaged.modified)
+								.filter { f -> f.name.endsWith('.java') || f.name.endsWith('.kt') }
+					}
+	modifiedFiles.finalizeValueOnRead()
 
-	assertjVersion = '3.23.1'
+	assertjVersion = '3.24.2'
 	awaitilityVersion = '4.2.0'
 	googleJsr305Version = '3.0.2'
 	hamcrestVersion = '2.2'
-	hibernateValidationVersion = '8.0.0.Final'
-	jacksonBomVersion = '2.14.0'
-	jaywayJsonPathVersion = '2.7.0'
+	hibernateValidationVersion = '8.0.1.Final'
+	jacksonBomVersion = '2.15.4'
+	jaywayJsonPathVersion = '2.8.0'
 	junit4Version = '4.13.2'
-	junitJupiterVersion = '5.9.1'
-	kafkaVersion = '3.3.1'
-	log4jVersion = '2.19.0'
-	micrometerDocsVersion = "1.0.0"
-	micrometerVersion = '1.10.2'
-	micrometerTracingVersion = '1.0.0'
-	mockitoVersion = '4.8.1'
-	reactorVersion = '2022.0.1'
+	junitJupiterVersion = '5.10.2'
+	kafkaVersion = '3.6.1'
+	log4jVersion = '2.21.1'
+	micrometerDocsVersion = '1.0.2'
+	micrometerVersion = '1.12.3'
+	micrometerTracingVersion = '1.2.3'
+	mockitoVersion = '5.6.0'
+	reactorVersion = '2023.0.3'
 	scalaVersion = '2.13'
-	springBootVersion = '2.6.14' // docs module
-	springDataVersion = '2022.0.0'
-	springRetryVersion = '2.0.0'
-	springVersion = '6.0.3'
-	zookeeperVersion = '3.6.3'
+	springBootVersion = '3.2.2' // docs module
+	springDataVersion = '2023.1.3'
+	springRetryVersion = '2.0.5'
+	springVersion = '6.1.4'
+	zookeeperVersion = '3.8.3'
 
 	idPrefix = 'kafka'
 
-	javaProjects = subprojects - project(':spring-kafka-bom')
+	javaProjects = subprojects - project(':spring-kafka-bom') - project(':spring-kafka-docs')
 
 }
 
 nohttp {
 	source.include '**/src/**'
-	source.exclude '**/*.gif', '**/*.ks'
+	source.exclude '**/*.gif', '**/*.ks', '**/.gradle/**'
 }
 
 allprojects {
@@ -113,17 +104,16 @@ allprojects {
 		imports {
 			mavenBom "com.fasterxml.jackson:jackson-bom:$jacksonBomVersion"
 			mavenBom "org.junit:junit-bom:$junitJupiterVersion"
-			mavenBom "org.springframework:spring-framework-bom:$springVersion"
-			mavenBom "io.projectreactor:reactor-bom:$reactorVersion"
-			mavenBom "org.springframework.data:spring-data-bom:$springDataVersion"
 			mavenBom "io.micrometer:micrometer-bom:$micrometerVersion"
 			mavenBom "io.micrometer:micrometer-tracing-bom:$micrometerTracingVersion"
+			mavenBom "io.projectreactor:reactor-bom:$reactorVersion"
+			mavenBom "org.springframework.data:spring-data-bom:$springDataVersion"
+			mavenBom "org.springframework:spring-framework-bom:$springVersion"
 		}
 	}
 
 	repositories {
 		mavenCentral()
-		maven { url 'https://repo.spring.io/release' }
 		maven { url 'https://repo.spring.io/milestone' }
 		if (version.endsWith('SNAPSHOT')) {
 			maven { url 'https://repo.spring.io/snapshot' }
@@ -139,7 +129,6 @@ configure(javaProjects) { subproject ->
 	apply from: "${rootProject.projectDir}/gradle/publish-maven.gradle"
 	apply plugin: 'eclipse'
 	apply plugin: 'idea'
-	apply plugin: 'jacoco'
 	apply plugin: 'checkstyle'
 	apply plugin: 'kotlin'
 	apply plugin: 'kotlin-spring'
@@ -159,9 +148,6 @@ configure(javaProjects) { subproject ->
 		registerFeature('optional') {
 			usingSourceSet(sourceSets.main)
 		}
-		registerFeature('provided') {
-			usingSourceSet(sourceSets.main)
-		}
 	}
 
 	compileJava {
@@ -174,17 +160,7 @@ configure(javaProjects) { subproject ->
 		options.encoding = 'UTF-8'
 	}
 
-	compileTestKotlin {
-		kotlinOptions {
-			jvmTarget = '17'
-		}
-	}
-
 	eclipse.project.natures += 'org.springframework.ide.eclipse.core.springnature'
-
-	jacoco {
-		toolVersion = '0.8.7'
-	}
 
 	// dependencies that are common across all java projects
 	dependencies {
@@ -208,7 +184,7 @@ configure(javaProjects) { subproject ->
 	}
 
 	// enable all compiler warnings; individual projects may customize further
-	[compileJava, compileTestJava]*.options*.compilerArgs = ['-Xlint:all,-options']
+	[compileJava, compileTestJava]*.options*.compilerArgs = ['-Xlint:all,-options,-processing', '-parameters']
 
 	test {
 		testLogging {
@@ -220,31 +196,14 @@ configure(javaProjects) { subproject ->
 		}
 
 		maxHeapSize = '1536m'
-//		jvmArgs '-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:8111'
-		jacoco {
-			destinationFile = file("$buildDir/jacoco.exec")
-		}
 		useJUnitPlatform()
 
-		if (System.properties['sonar.host.url']) {
-			finalizedBy jacocoTestReport
-		}
 	}
 
 	checkstyle {
 		configDirectory.set(rootProject.file("src/checkstyle"))
-		toolVersion = '9.0'
+		toolVersion = '10.12.5'
 	}
-
-	jacocoTestReport {
-		reports {
-			xml.enabled true
-			csv.enabled false
-			html.enabled false
-			xml.destination file("${buildDir}/reports/jacoco/test/jacocoTestReport.xml")
-		}
-	}
-
   if (shouldPublish) {
 	publishing {
       repositories {
@@ -263,12 +222,6 @@ configure(javaProjects) { subproject ->
 			mavenJava(MavenPublication) {
 				suppressAllPomMetadataWarnings()
 				from components.java
-				pom.withXml {
-					def pomDeps = asNode().dependencies.first()
-					subproject.configurations.providedImplementation.allDependencies.each { dep ->
-						pomDeps.remove(pomDeps.'*'.find { it.artifactId.text() == dep.name })
-					}
-				}
 			}
 		}
 	}
@@ -278,15 +231,13 @@ configure(javaProjects) { subproject ->
         sign publishing.publications.mavenJava
 		// useInMemoryPgpKeys(findProperty('signing.keyId'), findProperty('signing.secretKeyRingFile'), System.getenv('GPG_KEY_PASSWORD'))
       }
-    }	
+    }		
   }
 
 	task updateCopyrights {
 		onlyIf { !isCI }
-		if (gitPresent) {
-			inputs.files(modifiedFiles.filter { f -> f.path.contains(subproject.name) })
-		}
-		outputs.dir('build')
+		inputs.files(modifiedFiles.filter { f -> f.path.contains(subproject.name) })
+		outputs.dir('build/classes')
 
 		doLast {
 			def now = Calendar.instance.get(Calendar.YEAR) as String
@@ -299,7 +250,7 @@ configure(javaProjects) { subproject ->
 							def beginningYear = matcher[0][1]
 							if (now != beginningYear && now != matcher[0][2]) {
 								def years = "$beginningYear-$now"
-								def sourceCode = file.text
+								def sourceCode = file.getText('UTF-8')
 								sourceCode = sourceCode.replaceFirst(/20\d\d(-20\d\d)?/, years)
 								file.write(sourceCode)
 								println "Copyright updated for file: $file"
@@ -321,7 +272,7 @@ configure(javaProjects) { subproject ->
 					'Created-By': "JDK ${System.properties['java.version']} (${System.properties['java.specification.vendor']})",
 					'Implementation-Title': subproject.name,
 					'Implementation-Vendor-Id': subproject.group,
-					'Implementation-Vendor': 'Pivotal Software, Inc.',
+					'Implementation-Vendor': 'VMware Inc.',
 					'Implementation-URL': linkHomepage,
 					'Automatic-Module-Name': subproject.name.replace('-', '.')  // for Jigsaw
 			)
@@ -379,19 +330,19 @@ project ('spring-kafka') {
 		api 'io.micrometer:micrometer-observation'
 		optionalApi 'io.micrometer:micrometer-tracing'
 
-        implementation 'ai.superstream:superstream-java:1.0.0'
-
 		testImplementation project (':spring-kafka-test')
 		testImplementation 'io.projectreactor:reactor-test'
 		testImplementation "org.mockito:mockito-junit-jupiter:$mockitoVersion"
 		testImplementation "org.hibernate.validator:hibernate-validator:$hibernateValidationVersion"
-		testImplementation 'io.micrometer:micrometer-observation-test'
+		testImplementation ('io.micrometer:micrometer-observation-test') {
+			exclude group: "org.mockito"
+		}
 		testImplementation 'io.micrometer:micrometer-tracing-bridge-brave'
 		testImplementation 'io.micrometer:micrometer-tracing-test'
-		testImplementation 'io.micrometer:micrometer-tracing-integration-test'
-
+		testImplementation ('io.micrometer:micrometer-tracing-integration-test') {
+			exclude group: "org.mockito"
+		}
 	}
-
 }
 
 project('spring-kafka-bom') {
@@ -417,10 +368,6 @@ project('spring-kafka-bom') {
 			}
 		}
 	}
-
-	sonarqube {
-		skipProject = true
-	}
 }
 
 project ('spring-kafka-test') {
@@ -439,9 +386,15 @@ project ('spring-kafka-test') {
 		}
 		api "org.apache.kafka:kafka-clients:$kafkaVersion:test"
 		api "org.apache.kafka:kafka-metadata:$kafkaVersion"
+		api "org.apache.kafka:kafka-server-common:$kafkaVersion"
+		api "org.apache.kafka:kafka-server-common:$kafkaVersion:test"
 		api "org.apache.kafka:kafka-streams-test-utils:$kafkaVersion"
-		api "org.apache.kafka:kafka_$scalaVersion:$kafkaVersion"
-		api "org.apache.kafka:kafka_$scalaVersion:$kafkaVersion:test"
+		api ("org.apache.kafka:kafka_$scalaVersion:$kafkaVersion") {
+			exclude group: 'commons-logging'
+		}
+		api ("org.apache.kafka:kafka_$scalaVersion:$kafkaVersion:test") {
+			exclude group: 'commons-logging'
+		}
 		api 'org.junit.jupiter:junit-jupiter-api'
 		api 'org.junit.platform:junit-platform-launcher'
 		optionalApi "org.hamcrest:hamcrest-core:$hamcrestVersion"
@@ -453,54 +406,12 @@ project ('spring-kafka-test') {
 	}
 }
 
-project ('spring-kafka-docs') {
-	description = 'Spring Kafka Code Snippets For Docs'
-
-	dependencies {
-		api "org.springframework.boot:spring-boot-starter:$springBootVersion"
-		api project (':spring-kafka')
-		optionalApi 'org.jetbrains.kotlin:kotlin-stdlib'
-		optionalApi 'com.fasterxml.jackson.core:jackson-core'
-		optionalApi 'com.fasterxml.jackson.core:jackson-databind'
-	}
-
-	compileKotlin {
-		kotlinOptions {
-			jvmTarget = '17'
-		}
-	}
-
-	sonarqube {
-		skipProject = true
-	}
-
-}
-
-sonarqube {
-	properties {
-		property 'sonar.links.homepage', linkHomepage
-		property 'sonar.links.ci', linkCi
-		property 'sonar.links.issue', linkIssue
-		property 'sonar.links.scm', linkScmUrl
-		property 'sonar.links.scm_dev', linkScmDevConnection
-	}
-}
-
 configurations {
-	asciidoctorExtensions
 	micrometerDocs
 }
 
 dependencies {
-	asciidoctorExtensions "io.spring.asciidoctor.backends:spring-asciidoctor-backends:${springAsciidoctorBackendsVersion}"
 	micrometerDocs "io.micrometer:micrometer-docs-generator:$micrometerDocsVersion"
-}
-
-task prepareAsciidocBuild(type: Sync) {
-	dependsOn configurations.asciidoctorExtensions
-	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-	from 'spring-kafka-docs/src/main/asciidoc/','spring-kafka-docs/src/main/java','spring-kafka-docs/src/main/kotlin'
-	into "$buildDir/asciidoc"
 }
 
 def observationInputDir = file('spring-kafka/src/main/java/org/springframework/kafka/support/micrometer').absolutePath
@@ -522,78 +433,6 @@ task filterMetricsDocsContent(type: Copy) {
 	rename { filename -> filename.replace '_', '' }
 	filter { line -> line.replaceAll('org.springframework.kafka.support.micrometer.', '').replaceAll('^Fully qualified n', 'N') }
 }
-
-asciidoctorPdf {
-	dependsOn prepareAsciidocBuild, filterMetricsDocsContent
-	baseDirFollowsSourceFile()
-	configurations 'asciidoctorExt'
-
-	asciidoctorj {
-		sourceDir "$buildDir/asciidoc"
-		inputs.dir(sourceDir)
-		sources {
-			include 'index.adoc'
-		}
-		options doctype: 'book'
-		attributes 'icons': 'font',
-		'sectanchors': '',
-		'sectnums': '',
-		'toc': '',
-		'source-highlighter' : 'coderay',
-		revnumber: project.version,
-		'project-version': project.version
-	}
-}
-
-asciidoctorj {
-	version = '2.4.1'
-	// fatalWarnings ".*"
-	options doctype: 'book', eruby: 'erubis'
-	attributes([
-			icons: 'font',
-			idprefix: '',
-			idseparator: '-',
-			docinfo: 'shared',
-			revnumber: project.version,
-			sectanchors: '',
-			sectnums: '',
-			'source-highlighter': 'highlight.js',
-			highlightjsdir: 'js/highlight',
-			'highlightjs-theme': 'googlecode',
-			stylesdir: 'css/',
-			stylesheet: 'stylesheet.css',
-			'spring-version': project.version,
-			'project-version': project.version,
-			'java-examples': 'org/springframework/kafka/jdocs',
-			'kotlin-examples': 'org/springframework/kafka/kdocs'
-	])
-}
-
-asciidoctor {
-	dependsOn asciidoctorPdf
-	baseDirFollowsSourceFile()
-	configurations 'asciidoctorExtensions'
-	sourceDir = file("$buildDir/asciidoc")
-	outputOptions {
-		backends "spring-html"
-	}
-	sources {
-		include '*.adoc'
-	}
-	resources {
-		from(sourceDir) {
-			include 'images/*', 'css/**', 'js/**'
-		}
-	}
-
-}
-
-task reference(dependsOn: asciidoctor) {
-	group = 'Documentation'
-	description = 'Generate the reference documentation'
-}
-
-reference.onlyIf { "$System.env.NO_REFERENCE_TASK" != 'true' || project.hasProperty('ignoreEnvToStopReference') }
 
 task api(type: Javadoc) {
 	group = 'Documentation'
@@ -621,7 +460,7 @@ task api(type: Javadoc) {
 	destinationDir = new File(buildDir, 'api')
 }
 
-task docsZip(type: Zip, dependsOn: [reference]) {
+task docsZip(type: Zip, dependsOn: [':spring-kafka-docs:antora']) {
 	group = 'Distribution'
 	archiveClassifier = 'docs'
 	description = "Builds -${archiveClassifier} archive containing api and reference " +
@@ -635,14 +474,8 @@ task docsZip(type: Zip, dependsOn: [reference]) {
 		into 'api'
 	}
 
-	from ('build/docs/asciidoc') {
-		into 'reference/html'
-	}
-
-	from ('build/docs/asciidocPdf') {
-		include 'index.pdf'
-		rename 'index.pdf', 'spring-kafka-reference.pdf'
-		into 'reference/pdf'
+	from ('spring-kafka-docs/build/site') {
+		into 'reference/'
 	}
 }
 
@@ -665,7 +498,7 @@ task distZip(type: Zip, dependsOn: [docsZip]) { //, schemaZip]) {
 		into "${baseDir}"
 	}
 
-	from(zipTree(docsZip.archivePath)) {
+	from(zipTree(docsZip.archiveFile)) {
 		into "${baseDir}/docs"
 	}
 
@@ -684,11 +517,6 @@ task distZip(type: Zip, dependsOn: [docsZip]) { //, schemaZip]) {
 
 }
 
-artifacts {
-	archives distZip
-	archives docsZip
-}
-
 task dist(dependsOn: assemble) {
 	group = 'Distribution'
 	description = 'Builds -dist, -docs distribution archives.'
@@ -704,5 +532,3 @@ publishing {
 		}
 	}
 }
-
-apply from: "${rootDir}/gradle/docs.gradle"

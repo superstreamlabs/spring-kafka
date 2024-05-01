@@ -1,5 +1,5 @@
 /*
- * Copyright 2021-2022 the original author or authors.
+ * Copyright 2021-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -70,15 +70,7 @@ public class CommonDelegatingErrorHandler implements CommonErrorHandler {
 		Assert.notNull(delegates, "'delegates' cannot be null");
 		this.delegates.clear();
 		this.delegates.putAll(delegates);
-		checkDelegates();
-		updateClassifier(delegates);
-	}
-
-	private void updateClassifier(Map<Class<? extends Throwable>, CommonErrorHandler> delegates) {
-		Map<Class<? extends Throwable>, Boolean> classifications = delegates.keySet().stream()
-			.map(commonErrorHandler -> Map.entry(commonErrorHandler, true))
-			.collect(Collectors.toMap(Entry::getKey, Entry::getValue));
-		this.classifier = new BinaryExceptionClassifier(classifications);
+		checkDelegatesAndUpdateClassifier(this.delegates);
 	}
 
 	/**
@@ -90,12 +82,6 @@ public class CommonDelegatingErrorHandler implements CommonErrorHandler {
 	 */
 	public void setCauseChainTraversing(boolean causeChainTraversing) {
 		this.causeChainTraversing = causeChainTraversing;
-	}
-
-	@SuppressWarnings("deprecation")
-	@Override
-	public boolean remainingRecords() {
-		return this.defaultErrorHandler.remainingRecords();
 	}
 
 	@Override
@@ -125,23 +111,33 @@ public class CommonDelegatingErrorHandler implements CommonErrorHandler {
 	 * @param handler the handler.
 	 */
 	public void addDelegate(Class<? extends Throwable> throwable, CommonErrorHandler handler) {
-		this.delegates.put(throwable, handler);
-		checkDelegates();
+		Map<Class<? extends Throwable>, CommonErrorHandler> delegatesToCheck = new LinkedHashMap<>(this.delegates);
+		delegatesToCheck.put(throwable, handler);
+		checkDelegatesAndUpdateClassifier(delegatesToCheck);
+		this.delegates.clear();
+		this.delegates.putAll(delegatesToCheck);
 	}
 
 	@SuppressWarnings("deprecation")
-	private void checkDelegates() {
-		boolean remainingRecords = this.defaultErrorHandler.remainingRecords();
+	private void checkDelegatesAndUpdateClassifier(Map<Class<? extends Throwable>,
+			CommonErrorHandler> delegatesToCheck) {
+
 		boolean ackAfterHandle = this.defaultErrorHandler.isAckAfterHandle();
 		boolean seeksAfterHandling = this.defaultErrorHandler.seeksAfterHandling();
 		this.delegates.values().forEach(handler -> {
-			Assert.isTrue(remainingRecords == handler.remainingRecords(),
-					"All delegates must return the same value when calling 'remainingRecords()'");
 			Assert.isTrue(ackAfterHandle == handler.isAckAfterHandle(),
 					"All delegates must return the same value when calling 'isAckAfterHandle()'");
 			Assert.isTrue(seeksAfterHandling == handler.seeksAfterHandling(),
 					"All delegates must return the same value when calling 'seeksAfterHandling()'");
 		});
+		updateClassifier(delegatesToCheck);
+	}
+
+	private void updateClassifier(Map<Class<? extends Throwable>, CommonErrorHandler> delegates) {
+		Map<Class<? extends Throwable>, Boolean> classifications = delegates.keySet().stream()
+			.map(commonErrorHandler -> Map.entry(commonErrorHandler, true))
+			.collect(Collectors.toMap(Entry::getKey, Entry::getValue));
+		this.classifier = new BinaryExceptionClassifier(classifications);
 	}
 
 	@Override

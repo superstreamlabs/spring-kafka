@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2022 the original author or authors.
+ * Copyright 2014-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -115,15 +115,17 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 
 	private String correlationHeaderName;
 
+	private ContainerPostProcessor<?, ?, ?> containerPostProcessor;
+
 	@Nullable
 	private String mainListenerId;
 
 	@Override
 	public void setBeanFactory(BeanFactory beanFactory) throws BeansException {
 		this.beanFactory = beanFactory;
-		if (beanFactory instanceof ConfigurableListableBeanFactory) {
-			this.resolver = ((ConfigurableListableBeanFactory) beanFactory).getBeanExpressionResolver();
-			this.expressionContext = new BeanExpressionContext((ConfigurableListableBeanFactory) beanFactory, null);
+		if (beanFactory instanceof ConfigurableListableBeanFactory configurableListableBeanFactory) {
+			this.resolver = configurableListableBeanFactory.getBeanExpressionResolver();
+			this.expressionContext = new BeanExpressionContext(configurableListableBeanFactory, null);
 		}
 		this.beanResolver = new BeanFactoryResolver(beanFactory);
 	}
@@ -273,7 +275,7 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 	 * @since 1.1
 	 */
 	public boolean isBatchListener() {
-		return this.batchListener == null ? false : this.batchListener;
+		return this.batchListener != null && this.batchListener;
 	}
 
 	/**
@@ -282,6 +284,7 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 	 * @return the batch listener flag.
 	 * @since 2.8
 	 */
+	@Override
 	@Nullable
 	public Boolean getBatchListener() {
 		return this.batchListener;
@@ -468,6 +471,22 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 	}
 
 	@Override
+	public ContainerPostProcessor<?, ?, ?> getContainerPostProcessor() {
+		return this.containerPostProcessor;
+	}
+
+	/**
+	 * Set the {@link ContainerPostProcessor} on the endpoint to allow customizing the
+	 * container after its creation and configuration.
+	 *
+	 * @param containerPostProcessor the post processor.
+	 * @since 3.1
+	 */
+	public void setContainerPostProcessor(ContainerPostProcessor<?, ?, ?> containerPostProcessor) {
+		this.containerPostProcessor = containerPostProcessor;
+	}
+
+	@Override
 	public void afterPropertiesSet() {
 		boolean topicsEmpty = getTopics().isEmpty();
 		boolean topicPartitionsEmpty = ObjectUtils.isEmpty(getTopicPartitionsToAssign());
@@ -511,11 +530,10 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 				.acceptIfNotNull(this.correlationHeaderName, adapter::setCorrelationHeaderName);
 		adapter.setSplitIterables(this.splitIterables);
 		Object messageListener = adapter;
-		boolean isBatchListener = isBatchListener();
 		Assert.state(messageListener != null,
 				() -> "Endpoint [" + this + "] must provide a non null message listener");
 		if (this.recordFilterStrategy != null) {
-			if (isBatchListener) {
+			if (isBatchListener()) {
 				if (((MessagingMessageListenerAdapter<K, V>) messageListener).isConsumerRecords()) {
 					this.logger.warn(() -> "Filter strategy ignored when consuming 'ConsumerRecords' instead of a List"
 							+ (this.id != null ? " id: " + this.id : ""));
@@ -541,7 +559,7 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 	protected StringBuilder getEndpointDescription() {
 		StringBuilder result = new StringBuilder();
 		return result.append(getClass().getSimpleName()).append("[").append(this.id).
-				append("] topics=").append(this.topics).
+				append("] topics='").append(this.topics).
 				append("' | topicPartitions='").append(this.topicPartitions).
 				append("' | topicPattern='").append(this.topicPattern).append("'");
 	}

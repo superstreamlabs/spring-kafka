@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 the original author or authors.
+ * Copyright 2021-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import java.util.List;
 
 import org.springframework.core.MethodParameter;
 import org.springframework.kafka.support.KafkaNull;
+import org.springframework.lang.Nullable;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.converter.MessageConverter;
 import org.springframework.messaging.handler.annotation.support.PayloadMethodArgumentResolver;
@@ -32,6 +33,7 @@ import org.springframework.validation.Validator;
  * add this resolver if you need to handle tombstone records with null values.
  *
  * @author Gary Russell
+ * @author Wang Zhiyang
  * @since 2.7.4
  *
  */
@@ -47,8 +49,7 @@ public class KafkaNullAwarePayloadArgumentResolver extends PayloadMethodArgument
 		/*
 		 * Replace KafkaNull list elements with null.
 		 */
-		if (resolved instanceof List) {
-			List<?> list = ((List<?>) resolved);
+		if (resolved instanceof List<?> list) {
 			for (int i = 0; i < list.size(); i++) {
 				if (list.get(i) instanceof KafkaNull) {
 					list.set(i, null);
@@ -59,7 +60,7 @@ public class KafkaNullAwarePayloadArgumentResolver extends PayloadMethodArgument
 	}
 
 	@Override
-	protected boolean isEmptyPayload(Object payload) {
+	protected boolean isEmptyPayload(@Nullable Object payload) {
 		return payload == null || payload instanceof KafkaNull;
 	}
 

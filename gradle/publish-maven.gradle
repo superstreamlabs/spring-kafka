@@ -1,5 +1,4 @@
 apply plugin: 'maven-publish'
-apply plugin: 'com.jfrog.artifactory'
 
 publishing {
 	publications {
@@ -48,9 +47,4 @@ publishing {
 			}
 		}
 	}
-}
-
-artifactoryPublish {
-	dependsOn build
-	publications(publishing.publications.mavenJava)
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2022 the original author or authors.
+ * Copyright 2017-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import org.apache.commons.logging.LogFactory;
@@ -62,6 +63,7 @@ import org.springframework.core.log.LogAccessor;
 import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.support.TopicForRetryable;
 import org.springframework.lang.Nullable;
+import org.springframework.util.Assert;
 
 /**
  * An admin that delegates to an {@link AdminClient} to create topics defined
@@ -87,6 +89,8 @@ public class KafkaAdmin extends KafkaResourceFactory
 	private final Map<String, Object> configs;
 
 	private ApplicationContext applicationContext;
+
+	private Predicate<NewTopic> createOrModifyTopic = nt -> true;
 
 	private Duration closeTimeout = DEFAULT_CLOSE_TIMEOUT;
 
@@ -133,6 +137,15 @@ public class KafkaAdmin extends KafkaResourceFactory
 	}
 
 	/**
+	 * Return the operation timeout in seconds.
+	 * @return the timeout.
+	 * @since 3.0.2
+	 */
+	public int getOperationTimeout() {
+		return this.operationTimeout;
+	}
+
+	/**
 	 * Set to true if you want the application context to fail to load if we are unable
 	 * to connect to the broker during initialization, to check/add topics.
 	 * @param fatalIfBrokerNotAvailable true to fail.
@@ -158,6 +171,41 @@ public class KafkaAdmin extends KafkaResourceFactory
 	 */
 	public void setModifyTopicConfigs(boolean modifyTopicConfigs) {
 		this.modifyTopicConfigs = modifyTopicConfigs;
+	}
+
+	/**
+	 * Set a predicate that returns true if a discovered {@link NewTopic} bean should be
+	 * considered for creation or modification by this admin instance. The default
+	 * predicate returns true for all {@link NewTopic}s. Used by the default
+	 * implementation of {@link #newTopics()}.
+	 * @param createOrModifyTopic the predicate.
+	 * @since 2.9.10
+	 * @see #newTopics()
+	 */
+	public void setCreateOrModifyTopic(Predicate<NewTopic> createOrModifyTopic) {
+		Assert.notNull(createOrModifyTopic, "'createOrModifyTopic' cannot be null");
+		this.createOrModifyTopic = createOrModifyTopic;
+	}
+
+	/**
+	 * Return the predicate used to determine whether a {@link NewTopic} should be
+	 * considered for creation or modification.
+	 * @return the predicate.
+	 * @since 2.9.10
+	 * @see #newTopics()
+	 */
+	protected Predicate<NewTopic> getCreateOrModifyTopic() {
+		return this.createOrModifyTopic;
+	}
+
+	/**
+	 * Set the cluster id. Use this to prevent attempting to fetch the cluster id
+	 * from the broker, perhaps if the user does not have admin permissions.
+	 * @param clusterId the clusterId to set
+	 * @since 3.1
+	 */
+	public void setClusterId(String clusterId) {
+		this.clusterId = clusterId;
 	}
 
 	@Override
@@ -202,8 +250,10 @@ public class KafkaAdmin extends KafkaResourceFactory
 			if (adminClient != null) {
 				try {
 					synchronized (this) {
-						this.clusterId = adminClient.describeCluster().clusterId().get(this.operationTimeout,
-								TimeUnit.SECONDS);
+						if (this.clusterId != null) {
+							this.clusterId = adminClient.describeCluster().clusterId().get(this.operationTimeout,
+									TimeUnit.SECONDS);
+						}
 					}
 					addOrModifyTopicsIfNeeded(adminClient, newTopics);
 					return true;
@@ -229,10 +279,17 @@ public class KafkaAdmin extends KafkaResourceFactory
 		return false;
 	}
 
-	/*
-	 * Remove any TopicForRetryable bean if there is also a NewTopic with the same topic name.
+	/**
+	 * Return a collection of {@link NewTopic}s to create or modify. The default
+	 * implementation retrieves all {@link NewTopic} beans in the application context and
+	 * applies the {@link #setCreateOrModifyTopic(Predicate)} predicate to each one. It
+	 * also removes any {@link TopicForRetryable} bean if there is also a NewTopic with
+	 * the same topic name. This is performed before calling the predicate.
+	 * @return the collection of {@link NewTopic}s.
+	 * @since 2.9.10
+	 * @see #setCreateOrModifyTopic(Predicate)
 	 */
-	private Collection<NewTopic> newTopics() {
+	protected Collection<NewTopic> newTopics() {
 		Map<String, NewTopic> newTopicsMap = new HashMap<>(
 				this.applicationContext.getBeansOfType(NewTopic.class, false, false));
 		Map<String, NewTopics> wrappers = this.applicationContext.getBeansOfType(NewTopics.class, false, false);
@@ -260,6 +317,13 @@ public class KafkaAdmin extends KafkaResourceFactory
 				newTopicsMap.remove(entry.getKey());
 			}
 		}
+		Iterator<Entry<String, NewTopic>> iterator = newTopicsMap.entrySet().iterator();
+		while (iterator.hasNext()) {
+			Entry<String, NewTopic> next = iterator.next();
+			if (!this.createOrModifyTopic.test(next.getValue())) {
+				iterator.remove();
+			}
+		}
 		return new ArrayList<>(newTopicsMap.values());
 	}
 
@@ -269,12 +333,15 @@ public class KafkaAdmin extends KafkaResourceFactory
 		if (this.clusterId == null) {
 			try (AdminClient client = createAdmin()) {
 				this.clusterId = client.describeCluster().clusterId().get(this.operationTimeout, TimeUnit.SECONDS);
+				if (this.clusterId == null) {
+					this.clusterId = "null";
+				}
 			}
 			catch (InterruptedException ex) {
 				Thread.currentThread().interrupt();
 			}
 			catch (Exception ex) {
-				LOGGER.error(ex, "Could not obtaine cluster info");
+				LOGGER.error(ex, "Could not obtain cluster info");
 			}
 		}
 		return this.clusterId;
@@ -306,7 +373,7 @@ public class KafkaAdmin extends KafkaResourceFactory
 		}
 	}
 
-	private AdminClient createAdmin() {
+	AdminClient createAdmin() {
 		Map<String, Object> configs2 = new HashMap<>(this.configs);
 		checkBootstrap(configs2);
 		return AdminClient.create(configs2);
@@ -363,6 +430,10 @@ public class KafkaAdmin extends KafkaResourceFactory
 				if (topicOptional.isPresent() && topicOptional.get().configs() != null) {
 					for (Map.Entry<String, String> desiredConfigParameter : topicOptional.get().configs().entrySet()) {
 						ConfigEntry actualConfigParameter = topicConfig.getValue().get(desiredConfigParameter.getKey());
+						if (actualConfigParameter == null) {
+							throw new IllegalStateException("Topic property '" + desiredConfigParameter.getKey()
+									+ "' does not exist");
+						}
 						if (!desiredConfigParameter.getValue().equals(actualConfigParameter.value())) {
 							configMismatchesEntries.add(actualConfigParameter);
 						}

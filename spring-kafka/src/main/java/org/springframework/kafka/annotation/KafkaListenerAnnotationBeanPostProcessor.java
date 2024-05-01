@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2022 the original author or authors.
+ * Copyright 2014-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,7 +37,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.apache.commons.logging.LogFactory;
@@ -78,6 +77,7 @@ import org.springframework.core.log.LogAccessor;
 import org.springframework.format.Formatter;
 import org.springframework.format.FormatterRegistry;
 import org.springframework.format.support.DefaultFormattingConversionService;
+import org.springframework.kafka.config.ContainerPostProcessor;
 import org.springframework.kafka.config.KafkaListenerConfigUtils;
 import org.springframework.kafka.config.KafkaListenerContainerFactory;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistrar;
@@ -138,6 +138,7 @@ import org.springframework.validation.Validator;
  * @author Dimitri Penner
  * @author Filip Halemba
  * @author Tomaz Fernandes
+ * @author Wang Zhiyang
  *
  * @see KafkaListener
  * @see KafkaListenerErrorHandler
@@ -254,8 +255,8 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	@Override
 	public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
 		this.applicationContext = applicationContext;
-		if (applicationContext instanceof ConfigurableApplicationContext) {
-			setBeanFactory(((ConfigurableApplicationContext) applicationContext).getBeanFactory());
+		if (applicationContext instanceof ConfigurableApplicationContext cac) {
+			setBeanFactory(cac.getBeanFactory());
 		}
 		else {
 			setBeanFactory(applicationContext);
@@ -264,11 +265,11 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 
 	/**
 	 * Making a {@link BeanFactory} available is optional; if not set,
-	 * {@link KafkaListenerConfigurer} beans won't get autodetected and an
+	 * {@link KafkaListenerConfigurer} beans won't get auto-detected and an
 	 * {@link #setEndpointRegistry endpoint registry} has to be explicitly configured.
 	 * @param beanFactory the {@link BeanFactory} to be used.
 	 */
-	public void setBeanFactory(BeanFactory beanFactory) {
+	public synchronized void setBeanFactory(BeanFactory beanFactory) {
 		this.beanFactory = beanFactory;
 		if (beanFactory instanceof ConfigurableListableBeanFactory clbf) {
 			this.resolver = clbf.getBeanExpressionResolver();
@@ -333,7 +334,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 		this.registrar.afterPropertiesSet();
 		Map<String, ContainerGroupSequencer> sequencers =
 				this.applicationContext.getBeansOfType(ContainerGroupSequencer.class, false, false);
-		sequencers.values().forEach(seq -> seq.initialize());
+		sequencers.values().forEach(ContainerGroupSequencer::initialize);
 	}
 
 	private void buildEnhancer() {
@@ -392,7 +393,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 					}
 				}
 				this.logger.debug(() -> annotatedMethods.size() + " @KafkaListener methods processed on bean '"
-							+ beanName + "': " + annotatedMethods);
+						+ beanName + "': " + annotatedMethods);
 			}
 			if (hasClassLevelListeners) {
 				processMultiMethodListeners(classLevelListeners, multiMethods, bean, beanName);
@@ -405,35 +406,27 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	 * AnnotationUtils.getRepeatableAnnotations does not look at interfaces
 	 */
 	private Collection<KafkaListener> findListenerAnnotations(Class<?> clazz) {
-		Set<KafkaListener> listeners = new HashSet<>();
-		KafkaListener ann = AnnotatedElementUtils.findMergedAnnotation(clazz, KafkaListener.class);
-		if (ann != null) {
-			ann = enhance(clazz, ann);
-			listeners.add(ann);
-		}
-		KafkaListeners anns = AnnotationUtils.findAnnotation(clazz, KafkaListeners.class);
-		if (anns != null) {
-			listeners.addAll(Arrays.stream(anns.value())
-					.map(anno -> enhance(clazz, anno))
-					.collect(Collectors.toList()));
-		}
-		return listeners;
+		return findListenerAnnotationsByAnnotatedElement(clazz);
 	}
 
 	/*
 	 * AnnotationUtils.getRepeatableAnnotations does not look at interfaces
 	 */
 	private Set<KafkaListener> findListenerAnnotations(Method method) {
+		return findListenerAnnotationsByAnnotatedElement(method);
+	}
+
+	private Set<KafkaListener> findListenerAnnotationsByAnnotatedElement(AnnotatedElement element) {
 		Set<KafkaListener> listeners = new HashSet<>();
-		KafkaListener ann = AnnotatedElementUtils.findMergedAnnotation(method, KafkaListener.class);
+		KafkaListener ann = AnnotatedElementUtils.findMergedAnnotation(element, KafkaListener.class);
 		if (ann != null) {
-			ann = enhance(method, ann);
+			ann = enhance(element, ann);
 			listeners.add(ann);
 		}
-		KafkaListeners anns = AnnotationUtils.findAnnotation(method, KafkaListeners.class);
+		KafkaListeners anns = AnnotationUtils.findAnnotation(element, KafkaListeners.class);
 		if (anns != null) {
 			listeners.addAll(Arrays.stream(anns.value())
-					.map(anno -> enhance(method, anno))
+					.map(anno -> enhance(element, anno))
 					.toList());
 		}
 		return listeners;
@@ -445,12 +438,12 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 		}
 		else {
 			return AnnotationUtils.synthesizeAnnotation(
-				this.enhancer.apply(AnnotationUtils.getAnnotationAttributes(ann), element), KafkaListener.class, null);
+					this.enhancer.apply(AnnotationUtils.getAnnotationAttributes(ann), element), KafkaListener.class, null);
 		}
 	}
 
-	private void processMultiMethodListeners(Collection<KafkaListener> classLevelListeners, List<Method> multiMethods,
-			Object bean, String beanName) {
+	private synchronized void processMultiMethodListeners(Collection<KafkaListener> classLevelListeners,
+			List<Method> multiMethods, Object bean, String beanName) {
 
 		List<Method> checkedMethods = new ArrayList<>();
 		Method defaultMethod = null;
@@ -477,14 +470,16 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 		}
 	}
 
-	protected void processKafkaListener(KafkaListener kafkaListener, Method method, Object bean, String beanName) {
+	protected synchronized void processKafkaListener(KafkaListener kafkaListener, Method method, Object bean,
+			String beanName) {
+
 		Method methodToUse = checkProxy(method, bean);
 		MethodKafkaListenerEndpoint<K, V> endpoint = new MethodKafkaListenerEndpoint<>();
 		endpoint.setMethod(methodToUse);
-		endpoint.setId(getEndpointId(kafkaListener));
 
 		String beanRef = kafkaListener.beanRef();
 		this.listenerScope.addListener(beanRef, bean);
+		endpoint.setId(getEndpointId(kafkaListener));
 		String[] topics = resolveTopics(kafkaListener);
 		TopicPartitionOffset[] tps = resolveTopicPartitions(kafkaListener);
 		if (!processMainAndRetryListeners(kafkaListener, bean, beanName, methodToUse, endpoint, topics, tps)) {
@@ -508,7 +503,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 
 		RetryTopicConfiguration retryTopicConfiguration = new RetryTopicConfigurationProvider(this.beanFactory,
 				this.resolver, this.expressionContext)
-						.findRetryConfigurationFor(retryableCandidates, methodToUse, bean);
+				.findRetryConfigurationFor(retryableCandidates, methodToUse, bean);
 
 		if (retryTopicConfiguration == null) {
 			String[] candidates = retryableCandidates;
@@ -574,7 +569,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 					() -> rtc);
 
 			return this.beanFactory
-				.getBean(RetryTopicBeanNames.RETRY_TOPIC_CONFIGURER_BEAN_NAME, RetryTopicConfigurer.class);
+					.getBean(RetryTopicBeanNames.RETRY_TOPIC_CONFIGURER_BEAN_NAME, RetryTopicConfigurer.class);
 		}
 		throw new IllegalStateException("When there is no RetryTopicConfigurationSupport bean, the application context "
 				+ "must be a GenericApplicationContext");
@@ -615,7 +610,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	}
 
 	protected void processListener(MethodKafkaListenerEndpoint<?, ?> endpoint, KafkaListener kafkaListener,
-								Object bean, String beanName, String[] topics, TopicPartitionOffset[] tps) {
+			Object bean, String beanName, String[] topics, TopicPartitionOffset[] tps) {
 
 		processKafkaListenerAnnotation(endpoint, kafkaListener, bean, topics, tps);
 
@@ -661,6 +656,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 		resolveErrorHandler(endpoint, kafkaListener);
 		resolveContentTypeConverter(endpoint, kafkaListener);
 		resolveFilter(endpoint, kafkaListener);
+		resolveContainerPostProcessor(endpoint, kafkaListener);
 	}
 
 	private void resolveErrorHandler(MethodKafkaListenerEndpoint<?, ?> endpoint, KafkaListener kafkaListener) {
@@ -692,7 +688,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 		}
 	}
 
-	@SuppressWarnings({ "rawtypes", UNCHECKED })
+	@SuppressWarnings({"rawtypes", UNCHECKED})
 	private void resolveFilter(MethodKafkaListenerEndpoint<?, ?> endpoint, KafkaListener kafkaListener) {
 		Object filter = resolveExpression(kafkaListener.filter());
 		if (filter instanceof RecordFilterStrategy rfs) {
@@ -716,14 +712,13 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 			return null;
 		}
 
-		KafkaListenerContainerFactory<?> factory = null;
-
 		Object resolved = resolveExpression(containerFactory);
-		if (resolved instanceof KafkaListenerContainerFactory) {
-			return (KafkaListenerContainerFactory<?>) resolved;
+		if (resolved instanceof KafkaListenerContainerFactory<?> klcf) {
+			return klcf;
 		}
-		String containerFactoryBeanName = resolveExpressionAsString(containerFactory,
-				"containerFactory");
+
+		KafkaListenerContainerFactory<?> factory = null;
+		String containerFactoryBeanName = resolveExpressionAsString(containerFactory, "containerFactory");
 		if (StringUtils.hasText(containerFactoryBeanName)) {
 			assertBeanFactory();
 			try {
@@ -736,6 +731,16 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 			}
 		}
 		return factory;
+	}
+
+	private void resolveContainerPostProcessor(MethodKafkaListenerEndpoint<?, ?> endpoint,
+			KafkaListener kafkaListener) {
+
+		final String containerPostProcessor = kafkaListener.containerPostProcessor();
+		if (StringUtils.hasText(containerPostProcessor)) {
+			endpoint.setContainerPostProcessor(this.beanFactory.getBean(containerPostProcessor,
+					ContainerPostProcessor.class));
+		}
 	}
 
 	protected void assertBeanFactory() {
@@ -764,8 +769,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 						loadProperty(properties, prop, prop);
 					}
 				}
-				else if (value instanceof Collection) {
-					Collection<?> values = (Collection<?>) value;
+				else if (value instanceof Collection<?> values) {
 					if (!values.isEmpty() && values.iterator().next() instanceof String) {
 						for (String prop : (Collection<String>) value) {
 							loadProperty(properties, prop, prop);
@@ -865,7 +869,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 		for (String partition : partitions) {
 			resolvePartitionAsInteger((String) topic, resolveExpression(partition), result, null, false, false);
 		}
-		if (partitionOffsets.length == 1 && partitionOffsets[0].partition().equals("*")) {
+		if (partitionOffsets.length == 1 && resolveExpression(partitionOffsets[0].partition()).equals("*")) {
 			result.forEach(tpo -> {
 				tpo.setOffset(resolveInitialOffset(tpo.getTopic(), partitionOffsets[0]));
 				tpo.setRelativeToCurrent(isRelative(tpo.getTopic(), partitionOffsets[0]));
@@ -1113,7 +1117,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 				}
 			}
 			else {
-				parsePartitions(part).forEach(p -> parts.add(p));
+				parsePartitions(part).forEach(parts::add);
 			}
 		}
 		return parts.stream()
@@ -1127,7 +1131,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	 * have been registered but not created yet.
 	 * @see KafkaListenerEndpointRegistrar#setMessageHandlerMethodFactory
 	 */
-	private class KafkaHandlerMethodFactoryAdapter implements MessageHandlerMethodFactory {
+	private final class KafkaHandlerMethodFactoryAdapter implements MessageHandlerMethodFactory {
 
 		private final DefaultFormattingConversionService defaultFormattingConversionService =
 				new DefaultFormattingConversionService();
@@ -1156,7 +1160,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 			if (validator != null) {
 				defaultFactory.setValidator(validator);
 			}
-			defaultFactory.setBeanFactory(KafkaListenerAnnotationBeanPostProcessor.this.beanFactory);
+			defaultFactory.setBeanFactory(KafkaListenerAnnotationBeanPostProcessor.this.beanFactory); // NOSONAR
 			this.defaultFormattingConversionService.addConverter(
 					new BytesToStringConverter(KafkaListenerAnnotationBeanPostProcessor.this.charset));
 			this.defaultFormattingConversionService.addConverter(new BytesToNumberConverter());
@@ -1177,14 +1181,8 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 
 	}
 
-	private static class BytesToStringConverter implements Converter<byte[], String> {
+	private record BytesToStringConverter(Charset charset) implements Converter<byte[], String> {
 
-
-		private final Charset charset;
-
-		BytesToStringConverter(Charset charset) {
-			this.charset = charset;
-		}
 
 		@Override
 		public String convert(byte[] source) {

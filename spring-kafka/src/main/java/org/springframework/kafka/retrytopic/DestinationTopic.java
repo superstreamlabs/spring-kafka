@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2022 the original author or authors.
+ * Copyright 2018-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -68,8 +68,8 @@ public class DestinationTopic {
 		return Type.NO_OPS.equals(this.properties.type);
 	}
 
-	public boolean isSingleTopicRetry() {
-		return Type.SINGLE_TOPIC_RETRY.equals(this.properties.type);
+	public boolean isReusableRetryTopic() {
+		return Type.REUSABLE_RETRY_TOPIC.equals(this.properties.type);
 	}
 
 	public boolean isMainTopic() {
@@ -212,6 +212,10 @@ public class DestinationTopic {
 			return Type.DLT.equals(this.type);
 		}
 
+		public boolean isRetryTopic() {
+			return Type.RETRY.equals(this.type) || Type.REUSABLE_RETRY_TOPIC.equals(this.type);
+		}
+
 		public String suffix() {
 			return this.suffix;
 		}
@@ -280,6 +284,20 @@ public class DestinationTopic {
 	}
 
 	enum Type {
-		MAIN, RETRY, SINGLE_TOPIC_RETRY, DLT, NO_OPS
+		MAIN,
+
+		RETRY,
+
+		/**
+		 * A retry topic reused along sequential retries
+		 * with the same backoff interval.
+		 *
+		 * @since 3.0.4
+		 */
+		REUSABLE_RETRY_TOPIC,
+
+		DLT,
+
+		NO_OPS
 	}
 }

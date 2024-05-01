@@ -1,5 +1,5 @@
 /*
- * Copyright 2021-2022 the original author or authors.
+ * Copyright 2021-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -134,12 +134,6 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 	}
 
 	@Override
-	@Deprecated(since = "2.9", forRemoval = true) // in 3.1
-	public boolean remainingRecords() {
-		return isSeekAfterError();
-	}
-
-	@Override
 	public boolean seeksAfterHandling() {
 		return isSeekAfterError();
 	}
@@ -172,7 +166,7 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 			Consumer<?, ?> consumer, MessageListenerContainer container) {
 
 		SeekUtils.seekOrRecover(thrownException, records, consumer, container, isCommitRecovered(), // NOSONAR
-				getFailureTracker()::recovered, this.logger, getLogLevel());
+				getFailureTracker(), this.logger, getLogLevel());
 	}
 
 	@Override

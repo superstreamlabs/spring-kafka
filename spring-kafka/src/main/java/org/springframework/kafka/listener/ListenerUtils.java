@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2022 the original author or authors.
+ * Copyright 2017-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,20 +16,11 @@
 
 package org.springframework.kafka.listener;
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectStreamClass;
+import java.util.Map;
+import java.util.function.Supplier;
 
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
-import org.apache.kafka.common.header.Header;
-import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.header.internals.RecordHeaders;
 
-import org.springframework.core.log.LogAccessor;
-import org.springframework.kafka.support.serializer.DeserializationException;
-import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 import org.springframework.util.backoff.BackOff;
 import org.springframework.util.backoff.BackOffExecution;
@@ -39,6 +30,7 @@ import org.springframework.util.backoff.BackOffExecution;
  *
  * @author Gary Russell
  * @author Francois Rosiere
+ * @author Antonio Tomac
  * @since 2.0
  *
  */
@@ -83,68 +75,6 @@ public final class ListenerUtils {
 	}
 
 	/**
-	 * Extract a {@link DeserializationException} from the supplied header name, if
-	 * present.
-	 * @param record the consumer record.
-	 * @param headerName the header name.
-	 * @param logger the logger for logging errors.
-	 * @return the exception or null.
-	 * @since 2.3
-	 */
-	@Nullable
-	public static DeserializationException getExceptionFromHeader(final ConsumerRecord<?, ?> record,
-			String headerName, LogAccessor logger) {
-
-		Header header = record.headers().lastHeader(headerName);
-		if (header != null) {
-			byte[] value = header.value();
-			DeserializationException exception = byteArrayToDeserializationException(logger, value);
-			if (exception != null) {
-				Headers headers = new RecordHeaders(record.headers().toArray());
-				headers.remove(headerName);
-				exception.setHeaders(headers);
-			}
-			return exception;
-		}
-		return null;
-	}
-
-	/**
-	 * Convert a byte array containing a serialized {@link DeserializationException} to the
-	 * {@link DeserializationException}.
-	 * @param logger a log accessor to log errors.
-	 * @param value the bytes.
-	 * @return the exception or null if deserialization fails.
-	 * @since 2.8.1
-	 */
-	@Nullable
-	public static DeserializationException byteArrayToDeserializationException(LogAccessor logger, byte[] value) {
-		try {
-			ObjectInputStream ois = new ObjectInputStream(new ByteArrayInputStream(value)) {
-
-				boolean first = true;
-
-				@Override
-				protected Class<?> resolveClass(ObjectStreamClass desc) throws IOException, ClassNotFoundException {
-					if (this.first) {
-						this.first = false;
-						Assert.state(desc.getName().equals(DeserializationException.class.getName()),
-								"Header does not contain a DeserializationException");
-					}
-					return super.resolveClass(desc);
-				}
-
-
-			};
-			return (DeserializationException) ois.readObject();
-		}
-		catch (IOException | ClassNotFoundException | ClassCastException e) {
-			logger.error(e, "Failed to deserialize a deserialization exception");
-			return null;
-		}
-	}
-
-	/**
 	 * Sleep according to the {@link BackOff}; when the {@link BackOffExecution} returns
 	 * {@link BackOffExecution#STOP} sleep for the previous backOff.
 	 * @param backOff the {@link BackOff} to create a new {@link BackOffExecution}.
@@ -155,7 +85,10 @@ public final class ListenerUtils {
 	 * @param container the container or parent container.
 	 * @throws InterruptedException if the thread is interrupted.
 	 * @since 2.7
+	 * @deprecated in favor of
+	 * {@link #unrecoverableBackOff(BackOff, Map, Map, MessageListenerContainer)}.
 	 */
+	@Deprecated(since = "3.1", forRemoval = true) // 3.2
 	public static void unrecoverableBackOff(BackOff backOff, ThreadLocal<BackOffExecution> executions,
 			ThreadLocal<Long> lastIntervals, MessageListenerContainer container) throws InterruptedException {
 
@@ -178,6 +111,40 @@ public final class ListenerUtils {
 	}
 
 	/**
+	 * Sleep according to the {@link BackOff}; when the {@link BackOffExecution} returns
+	 * {@link BackOffExecution#STOP} sleep for the previous backOff.
+	 * @param backOff the {@link BackOff} to create a new {@link BackOffExecution}.
+	 * @param executions a thread local containing the {@link BackOffExecution} for this
+	 * thread.
+	 * @param lastIntervals a thread local containing the previous {@link BackOff}
+	 * interval for this thread.
+	 * @param container the container or parent container.
+	 * @throws InterruptedException if the thread is interrupted.
+	 * @since 3.1
+	 */
+	public static void unrecoverableBackOff(BackOff backOff, Map<Thread, BackOffExecution> executions,
+			Map<Thread, Long> lastIntervals, MessageListenerContainer container) throws InterruptedException {
+
+		Thread currentThread = Thread.currentThread();
+		BackOffExecution backOffExecution = executions.get(currentThread);
+		if (backOffExecution == null) {
+			backOffExecution = backOff.start();
+			executions.put(currentThread, backOffExecution);
+		}
+		Long interval = backOffExecution.nextBackOff();
+		if (interval == BackOffExecution.STOP) {
+			interval = lastIntervals.get(currentThread);
+			if (interval == null) {
+				interval = 0L;
+			}
+		}
+		lastIntervals.put(currentThread, interval);
+		if (interval > 0) {
+			stoppableSleep(container, interval);
+		}
+	}
+
+	/**
 	 * Sleep for the desired timeout, as long as the container continues to run.
 	 * @param container the container.
 	 * @param interval the timeout.
@@ -185,11 +152,22 @@ public final class ListenerUtils {
 	 * @since 2.7
 	 */
 	public static void stoppableSleep(MessageListenerContainer container, long interval) throws InterruptedException {
+		conditionalSleep(container::isRunning, interval);
+	}
+
+	/**
+	 * Sleep for the desired timeout, as long as shouldSleepCondition supplies true.
+	 * @param shouldSleepCondition to.
+	 * @param interval the timeout.
+	 * @throws InterruptedException if the thread is interrupted.
+	 * @since 3.0.9
+	 */
+	public static void conditionalSleep(Supplier<Boolean> shouldSleepCondition, long interval) throws InterruptedException {
 		long timeout = System.currentTimeMillis() + interval;
 		long sleepInterval = interval > SMALL_INTERVAL_THRESHOLD ? DEFAULT_SLEEP_INTERVAL : SMALL_SLEEP_INTERVAL;
 		do {
 			Thread.sleep(sleepInterval);
-			if (!container.isRunning()) {
+			if (!shouldSleepCondition.get()) {
 				break;
 			}
 		}

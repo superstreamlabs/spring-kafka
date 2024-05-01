@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2022 the original author or authors.
+ * Copyright 2018-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,7 +40,9 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 
 import org.springframework.core.log.LogAccessor;
@@ -79,8 +81,6 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 
 	private static final long THIRTY = 30L;
 
-	private final HeaderNames headerNames = getHeaderNames();
-
 	private final boolean transactional;
 
 	private final BiFunction<ConsumerRecord<?, ?>, Exception, TopicPartition> destinationResolver;
@@ -88,6 +88,8 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 	private final Function<ProducerRecord<?, ?>, KafkaOperations<?, ?>> templateResolver;
 
 	private final EnumSet<HeaderNames.HeadersToAdd> whichHeaders = EnumSet.allOf(HeaderNames.HeadersToAdd.class);
+
+	private HeaderNames headerNames = getHeaderNames();
 
 	private boolean retainExceptionHeader;
 
@@ -111,7 +113,27 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 
 	private boolean skipSameTopicFatalExceptions = true;
 
+	private boolean logRecoveryRecord = false;
+
 	private ExceptionHeadersCreator exceptionHeadersCreator = this::addExceptionInfoHeaders;
+
+	private Supplier<HeaderNames> headerNamesSupplier = () -> HeaderNames.Builder
+			.original()
+			.offsetHeader(KafkaHeaders.DLT_ORIGINAL_OFFSET)
+			.timestampHeader(KafkaHeaders.DLT_ORIGINAL_TIMESTAMP)
+			.timestampTypeHeader(KafkaHeaders.DLT_ORIGINAL_TIMESTAMP_TYPE)
+			.topicHeader(KafkaHeaders.DLT_ORIGINAL_TOPIC)
+			.partitionHeader(KafkaHeaders.DLT_ORIGINAL_PARTITION)
+			.consumerGroupHeader(KafkaHeaders.DLT_ORIGINAL_CONSUMER_GROUP)
+		.exception()
+			.keyExceptionFqcn(KafkaHeaders.DLT_KEY_EXCEPTION_FQCN)
+			.exceptionFqcn(KafkaHeaders.DLT_EXCEPTION_FQCN)
+			.exceptionCauseFqcn(KafkaHeaders.DLT_EXCEPTION_CAUSE_FQCN)
+			.keyExceptionMessage(KafkaHeaders.DLT_KEY_EXCEPTION_MESSAGE)
+			.exceptionMessage(KafkaHeaders.DLT_EXCEPTION_MESSAGE)
+			.keyExceptionStacktrace(KafkaHeaders.DLT_KEY_EXCEPTION_STACKTRACE)
+			.exceptionStacktrace(KafkaHeaders.DLT_EXCEPTION_STACKTRACE)
+		.build();
 
 	/**
 	 * Create an instance with the provided template and a default destination resolving
@@ -195,6 +217,23 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 	* is less than 0, no partition is set when publishing to the topic.
 	*
 	* @param templateResolver the function that resolver the {@link KafkaOperations} to use for publishing.
+	* @param destinationResolver the resolving function.
+	* @since 3.0.9
+	*/
+	public DeadLetterPublishingRecoverer(Function<ProducerRecord<?, ?>, KafkaOperations<?, ?>> templateResolver,
+										BiFunction<ConsumerRecord<?, ?>, Exception, TopicPartition> destinationResolver) {
+		this(templateResolver, false, destinationResolver);
+	}
+
+	/**
+	* Create an instance with a template resolving function that receives the failed
+	* consumer record and the exception and returns a {@link KafkaOperations} and a
+	* flag on whether or not the publishing from this instance will be transactional
+	* or not. Also receives a destination resolving function that works similarly but
+	* returns a {@link TopicPartition} instead. If the partition in the {@link TopicPartition}
+	* is less than 0, no partition is set when publishing to the topic.
+	*
+	* @param templateResolver the function that resolver the {@link KafkaOperations} to use for publishing.
 	* @param transactional whether or not publishing by this instance should be transactional
 	* @param destinationResolver the resolving function.
 	* @since 2.7
@@ -224,7 +263,9 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 
 	/**
 	 * Set a function which will be called to obtain additional headers to add to the
-	 * published record.
+	 * published record. If a {@link Header} returned is an instance of
+	 * {@link SingleRecordHeader}, then that header will replace any existing header of
+	 * that name, rather than being appended as a new value.
 	 * @param headersFunction the headers function.
 	 * @since 2.5.4
 	 * @see #addHeadersFunction(BiFunction)
@@ -362,6 +403,15 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 	}
 
 	/**
+	 * Set to true if you want to log recovery record and exception.
+	 * @param logRecoveryRecord true to log record and exception.
+	 * @since 3.1
+	 */
+	public void setLogRecoveryRecord(boolean logRecoveryRecord) {
+		this.logRecoveryRecord = logRecoveryRecord;
+	}
+
+	/**
 	 * Set a {@link ExceptionHeadersCreator} implementation to completely take over
 	 * setting the exception headers in the output record. Disables all headers that are
 	 * set by default.
@@ -411,7 +461,10 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 	/**
 	 * Add a function which will be called to obtain additional headers to add to the
 	 * published record. Functions are called in the order that they are added, and after
-	 * any function passed into {@link #setHeadersFunction(BiFunction)}.
+	 * any function passed into {@link #setHeadersFunction(BiFunction)}. If a
+	 * {@link Header} returned is an instance of {@link SingleRecordHeader}, then that
+	 * header will replace any existing header of that name, rather than being appended as
+	 * a new value.
 	 * @param headersFunction the headers function.
 	 * @since 2.8.4
 	 * @see #setHeadersFunction(BiFunction)
@@ -461,12 +514,15 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 					+ " and the destination resolver routed back to the same topic");
 			return;
 		}
+		if (this.logRecoveryRecord) {
+			this.logger.info(exception, () -> "Recovery record " + KafkaUtils.format(record));
+		}
 		if (consumer != null && this.verifyPartition) {
 			tp = checkPartition(tp, consumer);
 		}
-		DeserializationException vDeserEx = ListenerUtils.getExceptionFromHeader(record,
+		DeserializationException vDeserEx = SerializationUtils.getExceptionFromHeader(record,
 				SerializationUtils.VALUE_DESERIALIZER_EXCEPTION_HEADER, this.logger);
-		DeserializationException kDeserEx = ListenerUtils.getExceptionFromHeader(record,
+		DeserializationException kDeserEx = SerializationUtils.getExceptionFromHeader(record,
 				SerializationUtils.KEY_DESERIALIZER_EXCEPTION_HEADER, this.logger);
 		Headers headers = new RecordHeaders(record.headers().toArray());
 		addAndEnhanceHeaders(record, exception, vDeserEx, kDeserEx, headers);
@@ -480,6 +536,9 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 	private void addAndEnhanceHeaders(ConsumerRecord<?, ?> record, Exception exception,
 			@Nullable DeserializationException vDeserEx, @Nullable DeserializationException kDeserEx, Headers headers) {
 
+		if (this.headerNames == null) {
+			this.headerNames = this.headerNamesSupplier.get();
+		}
 		if (kDeserEx != null) {
 			if (!this.retainExceptionHeader) {
 				headers.remove(SerializationUtils.KEY_DESERIALIZER_EXCEPTION_HEADER);
@@ -707,7 +766,12 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 		maybeAddOriginalHeaders(kafkaHeaders, record, exception);
 		Headers headers = this.headersFunction.apply(record, exception);
 		if (headers != null) {
-			headers.forEach(kafkaHeaders::add);
+			headers.forEach(header -> {
+				if (header instanceof SingleRecordHeader) {
+					kafkaHeaders.remove(header.key());
+				}
+				kafkaHeaders.add(header);
+			});
 		}
 	}
 
@@ -750,23 +814,44 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 				isKey ? names.exceptionInfo.keyExceptionFqcn : names.exceptionInfo.exceptionFqcn,
 				() -> exception.getClass().getName().getBytes(StandardCharsets.UTF_8),
 				HeaderNames.HeadersToAdd.EXCEPTION);
-		if (exception.getCause() != null) {
+		Exception cause = ErrorHandlingUtils.findRootCause(exception);
+		if (cause != null) {
 			appendOrReplace(kafkaHeaders,
 					names.exceptionInfo.exceptionCauseFqcn,
-					() -> exception.getCause().getClass().getName().getBytes(StandardCharsets.UTF_8),
+					() -> cause.getClass().getName().getBytes(StandardCharsets.UTF_8),
 					HeaderNames.HeadersToAdd.EX_CAUSE);
 		}
-		String message = exception.getMessage();
+		String message = buildMessage(exception, cause);
 		if (message != null) {
 			appendOrReplace(kafkaHeaders,
 					isKey ? names.exceptionInfo.keyExceptionMessage : names.exceptionInfo.exceptionMessage,
-					() -> exception.getMessage().getBytes(StandardCharsets.UTF_8),
+					() -> message.getBytes(StandardCharsets.UTF_8),
 					HeaderNames.HeadersToAdd.EX_MSG);
 		}
 		appendOrReplace(kafkaHeaders,
 				isKey ? names.exceptionInfo.keyExceptionStacktrace : names.exceptionInfo.exceptionStacktrace,
 				() -> getStackTraceAsString(exception).getBytes(StandardCharsets.UTF_8),
 				HeaderNames.HeadersToAdd.EX_STACKTRACE);
+	}
+
+	@Nullable
+	private String buildMessage(Exception exception, Throwable cause) {
+		String message = exception.getMessage();
+		if (!exception.equals(cause)) {
+			if (message != null) {
+				message = message + "; ";
+			}
+			String causeMsg = cause.getMessage();
+			if (causeMsg != null) {
+				if (message != null) {
+					message = message + causeMsg;
+				}
+				else {
+					message = causeMsg;
+				}
+			}
+		}
+		return message;
 	}
 
 	private void appendOrReplace(Headers headers, String header, Supplier<byte[]> valueSupplier,
@@ -792,25 +877,24 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 	 * in the sent record.
 	 * @return the header names.
 	 * @since 2.7
+	 * @deprecated since 3.0.9 - provide a supplier instead.
+	 * @see #setHeaderNamesSupplier(Supplier)
 	 */
+	@Nullable
+	@Deprecated(since = "3.0.9", forRemoval = true) // 3.2
 	protected HeaderNames getHeaderNames() {
-		return HeaderNames.Builder
-				.original()
-					.offsetHeader(KafkaHeaders.DLT_ORIGINAL_OFFSET)
-					.timestampHeader(KafkaHeaders.DLT_ORIGINAL_TIMESTAMP)
-					.timestampTypeHeader(KafkaHeaders.DLT_ORIGINAL_TIMESTAMP_TYPE)
-					.topicHeader(KafkaHeaders.DLT_ORIGINAL_TOPIC)
-					.partitionHeader(KafkaHeaders.DLT_ORIGINAL_PARTITION)
-					.consumerGroupHeader(KafkaHeaders.DLT_ORIGINAL_CONSUMER_GROUP)
-				.exception()
-					.keyExceptionFqcn(KafkaHeaders.DLT_KEY_EXCEPTION_FQCN)
-					.exceptionFqcn(KafkaHeaders.DLT_EXCEPTION_FQCN)
-					.exceptionCauseFqcn(KafkaHeaders.DLT_EXCEPTION_CAUSE_FQCN)
-					.keyExceptionMessage(KafkaHeaders.DLT_KEY_EXCEPTION_MESSAGE)
-					.exceptionMessage(KafkaHeaders.DLT_EXCEPTION_MESSAGE)
-					.keyExceptionStacktrace(KafkaHeaders.DLT_KEY_EXCEPTION_STACKTRACE)
-					.exceptionStacktrace(KafkaHeaders.DLT_EXCEPTION_STACKTRACE)
-				.build();
+		return null;
+	}
+
+	/**
+	 * Set a {@link Supplier} for {@link HeaderNames}.
+	 * @param supplier the supplier.
+	 * @since 3.0.9
+	 *
+	 */
+	public void setHeaderNamesSupplier(Supplier<HeaderNames> supplier) {
+		Assert.notNull(supplier, "'HeaderNames supplier cannot be null");
+		this.headerNamesSupplier = supplier;
 	}
 
 	/**
@@ -1368,9 +1452,39 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 		 * @param kafkaHeaders the {@link Headers} to add the header(s) to.
 		 * @param exception The exception.
 		 * @param isKey whether the exception is for a key or value.
-		 * @param headerNames the heaader names to use.
+		 * @param headerNames the header names to use.
 		 */
 		void create(Headers kafkaHeaders, Exception exception, boolean isKey, HeaderNames headerNames);
+
+	}
+
+	/**
+	 * A {@link Header} that indicates that this header should replace any existing headers
+	 * with this name, rather than being appended to the headers, which is the normal behavior.
+	 *
+	 * @since 2.9.5
+	 * @see DeadLetterPublishingRecoverer#setHeadersFunction(BiFunction)
+	 * @see DeadLetterPublishingRecoverer#addHeadersFunction(BiFunction)
+	 */
+	public static class SingleRecordHeader extends RecordHeader {
+
+		/**
+		 * Construct an instance.
+		 * @param key the key.
+		 * @param value the value.
+		 */
+		public SingleRecordHeader(String key, byte[] value) {
+			super(key, value);
+		}
+
+		/**
+		 * Construct an instance.
+		 * @param keyBuffer the key buffer.
+		 * @param valueBuffer the value buffer.
+		 */
+		public SingleRecordHeader(ByteBuffer keyBuffer, ByteBuffer valueBuffer) {
+			super(keyBuffer, valueBuffer);
+		}
 
 	}
 

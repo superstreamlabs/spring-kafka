@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2022 the original author or authors.
+ * Copyright 2017-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 
 import org.springframework.core.annotation.AliasFor;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
+import org.springframework.kafka.test.EmbeddedKafkaZKBroker;
 import org.springframework.kafka.test.condition.EmbeddedKafkaCondition;
+import org.springframework.test.context.aot.DisabledInAotMode;
 
 /**
  * Annotation that can be specified on a test class that runs Spring for Apache Kafka
@@ -71,6 +73,7 @@ import org.springframework.kafka.test.condition.EmbeddedKafkaCondition;
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 @Inherited
+@DisabledInAotMode
 public @interface EmbeddedKafka {
 
 	/**
@@ -94,13 +97,15 @@ public @interface EmbeddedKafka {
 	 * Set explicit ports on which the kafka brokers will listen. Useful when running an
 	 * embedded broker that you want to access from other processes.
 	 * A port must be provided for each instance, which means the number of ports must match the value of the count attribute.
+	 * This property is not valid when using KRaft mode.
 	 * @return ports for brokers.
 	 * @since 2.2.4
 	 */
 	int[] ports() default { 0 };
 
 	/**
-	 * Set the port on which the embedded Zookeeper should listen;
+	 * Set the port on which the embedded Zookeeper should listen.
+	 * This property is not valid when using KRaft mode.
 	 * @return the port.
 	 * @since 2.3
 	 */
@@ -151,27 +156,30 @@ public @interface EmbeddedKafka {
 	String brokerPropertiesLocation() default "";
 
 	/**
-	 * The property name to set with the bootstrap server addresses instead of the default
+	 * The property name to set with the bootstrap server addresses as well as the default
 	 * {@value org.springframework.kafka.test.EmbeddedKafkaBroker#SPRING_EMBEDDED_KAFKA_BROKERS}.
+	 * Defaults to {@code spring.kafka.bootstrap-servers} since 3.0.10.
 	 * @return the property name.
 	 * @since 2.3
 	 * @see org.springframework.kafka.test.EmbeddedKafkaBroker#brokerListProperty(String)
 	 */
-	String bootstrapServersProperty() default "";
+	String bootstrapServersProperty() default "spring.kafka.bootstrap-servers";
 
 	/**
 	 * Timeout for internal ZK client connection.
-	 * @return default {@link EmbeddedKafkaBroker#DEFAULT_ZK_CONNECTION_TIMEOUT}.
+	 * This property is not valid when using KRaft mode.
+	 * @return default {@link EmbeddedKafkaZKBroker#DEFAULT_ZK_CONNECTION_TIMEOUT}.
 	 * @since 2.4
 	 */
-	int zkConnectionTimeout() default EmbeddedKafkaBroker.DEFAULT_ZK_CONNECTION_TIMEOUT;
+	int zkConnectionTimeout() default EmbeddedKafkaZKBroker.DEFAULT_ZK_CONNECTION_TIMEOUT;
 
 	/**
 	 * Timeout for internal ZK client session.
-	 * @return default {@link EmbeddedKafkaBroker#DEFAULT_ZK_SESSION_TIMEOUT}.
+	 * This property is not valid when using KRaft mode.
+	 * @return default {@link EmbeddedKafkaZKBroker#DEFAULT_ZK_SESSION_TIMEOUT}.
 	 * @since 2.4
 	 */
-	int zkSessionTimeout() default EmbeddedKafkaBroker.DEFAULT_ZK_SESSION_TIMEOUT;
+	int zkSessionTimeout() default EmbeddedKafkaZKBroker.DEFAULT_ZK_SESSION_TIMEOUT;
 
 	/**
 	 * Timeout in seconds for admin operations (e.g. topic creation, close).
@@ -179,6 +187,13 @@ public @interface EmbeddedKafka {
 	 * @since 2.8.5
 	 */
 	int adminTimeout() default EmbeddedKafkaBroker.DEFAULT_ADMIN_TIMEOUT;
+
+	/**
+	 * Use KRaft instead of Zookeeper; default true.
+	 * @return whether to use KRaft.
+	 * @since 3.6
+	 */
+	boolean kraft() default true;
 
 }
 

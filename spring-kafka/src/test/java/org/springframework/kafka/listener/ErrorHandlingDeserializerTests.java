@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2022 the original author or authors.
+ * Copyright 2018-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,6 +35,7 @@ import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -52,9 +53,12 @@ import org.springframework.kafka.support.serializer.DeserializationException;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.SerializationUtils;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
+import org.springframework.kafka.test.EmbeddedKafkaZKBroker;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
+import org.springframework.validation.Errors;
+import org.springframework.validation.Validator;
 
 /**
  * @author Gary Russell
@@ -71,7 +75,7 @@ public class ErrorHandlingDeserializerTests {
 	public Config config;
 
 	@Test
-	public void testBadDeserializer() throws Exception {
+	void testBadDeserializer() throws Exception {
 		this.config.template().send(TOPIC, "foo", "bar");
 		this.config.template().send(TOPIC, "fail", "bar");
 		this.config.template().send(TOPIC, "foo", "fail");
@@ -83,7 +87,7 @@ public class ErrorHandlingDeserializerTests {
 	}
 
 	@Test
-	public void unitTests() throws Exception {
+	void unitTests() throws Exception {
 		ErrorHandlingDeserializer<String> ehd = new ErrorHandlingDeserializer<>(new StringDeserializer());
 		assertThat(ehd.deserialize("topic", "foo".getBytes())).isEqualTo("foo");
 		ehd.close();
@@ -129,11 +133,46 @@ public class ErrorHandlingDeserializerTests {
 		ErrorHandlingDeserializer<String> ehd = new ErrorHandlingDeserializer<>(new MyDes());
 		Headers headers = new RecordHeaders();
 		ehd.deserialize("foo", headers, new byte[1]);
-		DeserializationException dex = ListenerUtils.byteArrayToDeserializationException(null,
-				headers.lastHeader(SerializationUtils.VALUE_DESERIALIZER_EXCEPTION_HEADER).value());
+		DeserializationException dex = SerializationUtils.byteArrayToDeserializationException(null,
+				headers.lastHeader(SerializationUtils.VALUE_DESERIALIZER_EXCEPTION_HEADER));
 		assertThat(dex.getCause().getMessage())
 				.contains("Could not serialize")
 				.contains("original exception message");
+	}
+
+	@Test
+	void validate() {
+		ErrorHandlingDeserializer<String> ehd = new ErrorHandlingDeserializer<>(new StringDeserializer());
+		ehd.configure(Map.of(ErrorHandlingDeserializer.VALIDATOR_CLASS, Val.class.getName()), false);
+
+		Headers headers = new RecordHeaders();
+		assertThat(ehd.deserialize("foo", headers, "foo".getBytes())).isEqualTo("foo");
+		ehd.deserialize("foo", headers, "bar".getBytes());
+		DeserializationException ex = SerializationUtils.byteArrayToDeserializationException(null,
+				headers.lastHeader(SerializationUtils.VALUE_DESERIALIZER_EXCEPTION_HEADER));
+		assertThat(ex.getCause()).isInstanceOf(IllegalStateException.class)
+				.extracting("message", InstanceOfAssertFactories.STRING)
+				.contains("validation failure");
+
+		ehd.setValidator(new Validator() {
+
+			@Override
+			public void validate(Object target, Errors errors) {
+				throw new IllegalArgumentException("test validation");
+			}
+
+			@Override
+			public boolean supports(Class<?> clazz) {
+				return clazz.equals(String.class);
+			}
+
+		});
+		ehd.deserialize("foo", headers, "baz".getBytes());
+		ex = SerializationUtils.byteArrayToDeserializationException(null,
+				headers.lastHeader(SerializationUtils.VALUE_DESERIALIZER_EXCEPTION_HEADER));
+		assertThat(ex.getCause()).isInstanceOf(IllegalArgumentException.class)
+				.extracting("message")
+				.isEqualTo("test validation");
 	}
 
 	@Configuration
@@ -164,7 +203,7 @@ public class ErrorHandlingDeserializerTests {
 
 		@Bean
 		public EmbeddedKafkaBroker embeddedKafka() {
-			return new EmbeddedKafkaBroker(1, true, 1, TOPIC);
+			return new EmbeddedKafkaZKBroker(1, true, 1, TOPIC);
 		}
 
 		@Bean
@@ -185,7 +224,7 @@ public class ErrorHandlingDeserializerTests {
 			factory.setCommonErrorHandler(new CommonErrorHandler() {
 
 				@Override
-				public void handleRecord(Exception t, ConsumerRecord<?, ?> r,
+				public boolean handleOne(Exception t, ConsumerRecord<?, ?> r,
 						Consumer<?, ?> consumer, MessageListenerContainer container) {
 
 					if (r.value() == null && t.getCause() instanceof DeserializationException) {
@@ -196,6 +235,7 @@ public class ErrorHandlingDeserializerTests {
 						keyErrorCount.incrementAndGet();
 					}
 					latch.countDown();
+					return true;
 				}
 
 			});
@@ -282,6 +322,22 @@ public class ErrorHandlingDeserializerTests {
 	}
 
 	public static class Foo {
+
+	}
+
+	public static class Val implements Validator {
+
+		@Override
+		public void validate(Object target, Errors errors) {
+			if ("bar".equals(target)) {
+				errors.reject("validation failure");
+			}
+		}
+
+		@Override
+		public boolean supports(Class<?> clazz) {
+			return clazz.equals(String.class);
+		}
 
 	}
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 the original author or authors.
+ * Copyright 2020-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,7 +57,7 @@ public class MicrometerHolderTests {
 		given(beanProvider.getIfUnique()).willReturn(meterRegistry);
 
 		MicrometerHolder micrometerHolder = new MicrometerHolder(ctx, "holderName",
-				"timerName", "timerDesc", Collections.emptyMap());
+				"timerName", "timerDesc", r -> Collections.emptyMap());
 		Map<String, Timer> meters = (Map<String, Timer>) ReflectionTestUtils.getField(micrometerHolder, "meters");
 		assertThat(meters).hasSize(1);
 
@@ -77,7 +77,7 @@ public class MicrometerHolderTests {
 	@Test
 	void multiReg() {
 		assertThatIllegalStateException().isThrownBy(() -> new MicrometerHolder(
-					new AnnotationConfigApplicationContext(Config1.class), "", "", "", Collections.emptyMap()))
+					new AnnotationConfigApplicationContext(Config1.class), "", "", "", r -> Collections.emptyMap()))
 				.withMessage("No micrometer registry present (or more than one and "
 						+ "there is not exactly one marked with @Primary)");
 	}
@@ -85,7 +85,7 @@ public class MicrometerHolderTests {
 	@Test
 	void twoPrimaries() {
 		assertThatIllegalStateException().isThrownBy(() -> new MicrometerHolder(
-					new AnnotationConfigApplicationContext(Config2.class), "", "", "", Collections.emptyMap()))
+					new AnnotationConfigApplicationContext(Config2.class), "", "", "", r -> Collections.emptyMap()))
 			.withMessageContaining("more than one 'primary' bean");
 	}
 
@@ -93,7 +93,7 @@ public class MicrometerHolderTests {
 	void primary() {
 		AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext(Config3.class);
 		MicrometerHolder micrometerHolder = new MicrometerHolder(ctx, "holderName",
-				"timerName", "timerDesc", Collections.emptyMap());
+				"timerName", "timerDesc", r -> Collections.emptyMap());
 		@SuppressWarnings("unchecked")
 		Map<String, Timer> meters = (Map<String, Timer>) ReflectionTestUtils.getField(micrometerHolder, "meters");
 		assertThat(meters).hasSize(1);

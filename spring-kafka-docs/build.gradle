@@ -1,21 +1,22 @@
-jar {
-    enabled = false
+plugins {
+    id 'org.antora' version '1.0.0'
+    id 'io.spring.antora.generate-antora-yml' version '0.0.1'
 }
 
-sourcesJar {
-    enabled = false
+apply from: "${rootDir}/gradle/docs.gradle"
+apply plugin: 'java'
+apply plugin: 'eclipse'
+apply plugin: 'idea'
+apply plugin: 'kotlin'
+apply plugin: 'kotlin-spring'
+
+description = 'Spring Kafka Code Snippets For Docs'
+
+dependencies {
+    implementation "org.springframework.boot:spring-boot-starter:$springBootVersion"
+    implementation project (':spring-kafka')
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib'
+    implementation 'com.fasterxml.jackson.core:jackson-core'
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
 }
 
-javadocJar {
-    enabled = false
-}
-
-publishMavenJavaPublicationToMavenLocal {
-    enabled = false
-}
-
-project.afterEvaluate {
-
-    project.tasks.artifactoryPublish.enabled(false)
-
-}

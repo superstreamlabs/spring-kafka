@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2022 the original author or authors.
+ * Copyright 2019-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
 
@@ -33,7 +34,6 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
-import org.apache.kafka.common.header.internals.RecordHeader;
 
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.listener.BatchConsumerAwareMessageListener;
@@ -71,6 +71,8 @@ public class AggregatingReplyingKafkaTemplate<K, V, R>
 
 	private static final int DEFAULT_COMMIT_TIMEOUT = 30;
 
+	private final ReentrantLock aggregationLock = new ReentrantLock();
+
 	private final Map<Object, Set<RecordHolder<K, R>>> pending = new HashMap<>();
 
 	private final Map<TopicPartition, Long> offsets = new HashMap<>();
@@ -88,7 +90,7 @@ public class AggregatingReplyingKafkaTemplate<K, V, R>
 	 * @param replyContainer the reply container.
 	 * @param releaseStrategy the release strategy which is a {@link BiPredicate} which is
 	 * passed the current list and a boolean to indicate if this is for a normal delivery
-	 * or a timeout (when {@link #setReturnPartialOnTimeout(boolean)} is true. The
+	 * or a timeout (when {@link #setReturnPartialOnTimeout(boolean)} is true). The
 	 * predicate may modify the list of records.
 	 * @since 2.3.5
 	 */
@@ -136,7 +138,8 @@ public class AggregatingReplyingKafkaTemplate<K, V, R>
 				Object correlationId = isBinaryCorrelation()
 						? new CorrelationKey(correlation.value())
 						: new String(correlation.value(), StandardCharsets.UTF_8);
-				synchronized (this) {
+				this.aggregationLock.lock();
+				try {
 					if (isPending(correlationId)) {
 						List<ConsumerRecord<K, R>> list = addToCollection(record, correlationId).stream()
 								.map(RecordHolder::getRecord)
@@ -144,11 +147,7 @@ public class AggregatingReplyingKafkaTemplate<K, V, R>
 						if (this.releaseStrategy.test(list, false)) {
 							ConsumerRecord<K, Collection<ConsumerRecord<K, R>>> done =
 									new ConsumerRecord<>(AGGREGATED_RESULTS_TOPIC, 0, 0L, null, list);
-							done.headers()
-									.add(new RecordHeader(correlationHeaderName,
-											isBinaryCorrelation()
-													? ((CorrelationKey) correlationId).getCorrelationId()
-													: ((String) correlationId).getBytes(StandardCharsets.UTF_8)));
+							done.headers().add(correlation);
 							this.pending.remove(correlationId);
 							checkOffsetsAndCommitIfNecessary(list, consumer);
 							completed.add(done);
@@ -158,6 +157,9 @@ public class AggregatingReplyingKafkaTemplate<K, V, R>
 						logLateArrival(record, correlationId);
 					}
 				}
+				finally {
+					this.aggregationLock.unlock();
+				}
 			}
 		});
 		if (completed.size() > 0) {
@@ -166,20 +168,26 @@ public class AggregatingReplyingKafkaTemplate<K, V, R>
 	}
 
 	@Override
-	protected synchronized boolean handleTimeout(Object correlationId,
+	protected boolean handleTimeout(Object correlationId,
 			RequestReplyFuture<K, V, Collection<ConsumerRecord<K, R>>> future) {
 
-		Set<RecordHolder<K, R>> removed = this.pending.remove(correlationId);
-		if (removed != null && this.returnPartialOnTimeout) {
-			List<ConsumerRecord<K, R>> list = removed.stream()
-					.map(RecordHolder::getRecord)
-					.collect(Collectors.toList());
-			if (this.releaseStrategy.test(list, true)) {
-				future.complete(new ConsumerRecord<>(PARTIAL_RESULTS_AFTER_TIMEOUT_TOPIC, 0, 0L, null, list));
-				return true;
+		this.aggregationLock.lock();
+		try {
+			Set<RecordHolder<K, R>> removed = this.pending.remove(correlationId);
+			if (removed != null && this.returnPartialOnTimeout) {
+				List<ConsumerRecord<K, R>> list = removed.stream()
+						.map(RecordHolder::getRecord)
+						.collect(Collectors.toList());
+				if (this.releaseStrategy.test(list, true)) {
+					future.complete(new ConsumerRecord<>(PARTIAL_RESULTS_AFTER_TIMEOUT_TOPIC, 0, 0L, null, list));
+					return true;
+				}
 			}
+			return false;
 		}
-		return false;
+		finally {
+			this.aggregationLock.unlock();
+		}
 	}
 
 	private void checkOffsetsAndCommitIfNecessary(List<ConsumerRecord<K, R>> list, Consumer<?, ?> consumer) {

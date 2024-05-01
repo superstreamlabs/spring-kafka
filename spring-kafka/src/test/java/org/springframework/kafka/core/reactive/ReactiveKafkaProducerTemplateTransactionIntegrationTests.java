@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2022 the original author or authors.
+ * Copyright 2019-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscription;
 
@@ -53,6 +54,7 @@ import org.springframework.kafka.test.utils.KafkaTestUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import reactor.kafka.receiver.KafkaReceiver;
 import reactor.kafka.receiver.ReceiverOptions;
 import reactor.kafka.receiver.ReceiverRecord;
 import reactor.kafka.sender.SenderOptions;
@@ -65,6 +67,7 @@ import reactor.test.StepVerifier;
  * @author Mark Norkin
  * @author Gary Russell
  * @author Will Kennedy
+ * @author Adrian Chlebosz
  *
  * @since 2.3.0
  */
@@ -102,17 +105,18 @@ public class ReactiveKafkaProducerTemplateTransactionIntegrationTests {
 	}
 
 	@BeforeEach
-	public void setUp() {
-		reactiveKafkaProducerTemplate = new ReactiveKafkaProducerTemplate<>(setupSenderOptionsWithDefaultTopic(),
+	public void setUp(TestInfo info) {
+		reactiveKafkaProducerTemplate = new ReactiveKafkaProducerTemplate<>(setupSenderOptionsWithDefaultTopic(info),
 				new MessagingMessageConverter());
 	}
 
-	private SenderOptions<Integer, String> setupSenderOptionsWithDefaultTopic() {
+	private SenderOptions<Integer, String> setupSenderOptionsWithDefaultTopic(TestInfo info) {
 		Map<String, Object> senderProps =
 				KafkaTestUtils.producerProps(EmbeddedKafkaCondition.getBroker().getBrokersAsString());
 		SenderOptions<Integer, String> senderOptions = SenderOptions.create(senderProps);
 		senderOptions = senderOptions
-				.producerProperty(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "reactive.transaction")
+				.producerProperty(ProducerConfig.TRANSACTIONAL_ID_CONFIG,
+						"reactive.transaction." + info.getDisplayName().replaceAll("\\(\\)", ""))
 				.producerProperty(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
 		return senderOptions;
 	}
@@ -138,8 +142,15 @@ public class ReactiveKafkaProducerTemplateTransactionIntegrationTests {
 	@Test
 	public void shouldNotCreateTemplateIfOptionsIsNull() {
 		assertThatIllegalArgumentException()
-				.isThrownBy(() -> new ReactiveKafkaConsumerTemplate<String, String>(null))
+				.isThrownBy(() -> new ReactiveKafkaConsumerTemplate<>((ReceiverOptions<String, String>) null))
 				.withMessage("Receiver options can not be null");
+	}
+
+	@Test
+	public void shouldNotCreateTemplateIfReceiverIsNull() {
+		assertThatIllegalArgumentException()
+				.isThrownBy(() -> new ReactiveKafkaConsumerTemplate<>((KafkaReceiver<String, String>) null))
+				.withMessage("Kafka receiver can not be null");
 	}
 
 	@Test
@@ -270,7 +281,9 @@ public class ReactiveKafkaProducerTemplateTransactionIntegrationTests {
 						.abort()
 						.then(Mono.error(error))))
 				.expectErrorMatches(throwable -> throwable instanceof IllegalStateException &&
-						throwable.getMessage().equals("TransactionalId reactive.transaction: Invalid transition " +
+						throwable.getMessage().equals("TransactionalId reactive.transaction."
+								+ "shouldSendOneRecordTransactionallyViaTemplateAsSenderRecord"
+								+ "AndReceiveItExactlyOnceWithException: Invalid transition " +
 								"attempted from state READY to state ABORTING_TRANSACTION"))
 				.verify(DEFAULT_VERIFY_TIMEOUT);
 

@@ -9,8 +9,13 @@ Run the application and use curl to send some data:
 
 Console:
 
-`2018-11-05 11:50:29.244  INFO 60437 --- [fooGroup2-0-C-1] com.example.Application                  : Received: [Foo2 [foo=a], Foo2 [foo=b], Foo2 [foo=c], Foo2 [foo=d], Foo2 [foo=e]]`
-`2018-11-05 11:50:29.247  INFO 60437 --- [fooGroup2-0-C-1] com.example.Application                  : Messages sent, hit enter to commit tx`
+[source, bash]
+----
+2018-11-05 11:50:29.244  INFO 60437 --- [fooGroup2-0-C-1] com.example.Application                  : Received: [Foo2 [foo=a], Foo2 [foo=b], Foo2 [foo=c], Foo2 [foo=d], Foo2 [foo=e]]
 
-`2018-11-05 11:50:33.045  INFO 60437 --- [fooGroup3-0-C-1] com.example.Application                  : Received: [A, B, C, D, E]`
+2018-11-05 11:50:29.247 INFO 60437 --- [fooGroup2-0-C-1] com.example.Application                  : Messages sent, hit enter to commit tx
+
+2018-11-05 11:50:33.045  INFO 60437 --- [fooGroup3-0-C-1] com.example.Application                  : Received: [A, B, C, D, E]
+----
+
 

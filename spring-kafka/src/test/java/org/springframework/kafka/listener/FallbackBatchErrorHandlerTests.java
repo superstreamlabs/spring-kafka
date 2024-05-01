@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 the original author or authors.
+ * Copyright 2020-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,6 +38,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -82,7 +84,7 @@ public class FallbackBatchErrorHandlerTests {
 		assertThat(this.invoked).isEqualTo(3);
 		assertThat(recovered).hasSize(2);
 		verify(consumer).pause(any());
-		verify(consumer, times(3)).poll(any());
+		verify(consumer, times(2 * this.invoked)).poll(any());
 		verify(consumer).resume(any());
 		verify(consumer, times(2)).assignment();
 		verifyNoMoreInteractions(consumer);
@@ -108,7 +110,7 @@ public class FallbackBatchErrorHandlerTests {
 		assertThat(this.invoked).isEqualTo(1);
 		assertThat(recovered).hasSize(0);
 		verify(consumer).pause(any());
-		verify(consumer).poll(any());
+		verify(consumer, times(2)).poll(any());
 		verify(consumer).resume(any());
 		verify(consumer, times(2)).assignment();
 		verifyNoMoreInteractions(consumer);
@@ -139,7 +141,7 @@ public class FallbackBatchErrorHandlerTests {
 		assertThat(this.invoked).isEqualTo(3);
 		assertThat(recovered).hasSize(1);
 		verify(consumer).pause(any());
-		verify(consumer, times(3)).poll(any());
+		verify(consumer, times(2 * this.invoked)).poll(any());
 		verify(consumer).resume(any());
 		verify(consumer, times(2)).assignment();
 		verify(consumer).seek(new TopicPartition("foo", 0), 0L);
@@ -208,9 +210,11 @@ public class FallbackBatchErrorHandlerTests {
 		inOrder.verify(container).publishConsumerPausedEvent(map.keySet(), "For batch retry");
 		inOrder.verify(consumer).poll(any());
 		inOrder.verify(consumer).pause(any());
+		inOrder.verify(consumer).poll(any());
+		inOrder.verify(consumer).pause(any());
 		inOrder.verify(consumer).resume(any());
 		inOrder.verify(container).publishConsumerResumedEvent(map.keySet());
-		verify(consumer, times(3)).assignment();
+		verify(consumer, times(4)).assignment();
 		verifyNoMoreInteractions(consumer);
 		assertThat(pubPauseCalled.get()).isTrue();
 	}
@@ -240,12 +244,56 @@ public class FallbackBatchErrorHandlerTests {
 				.isFalse();
 	}
 
+	@SuppressWarnings({ "unchecked", "rawtypes" })
+	@Test
+	void reclassifyOnExceptionChange() {
+		AtomicReference<Exception> thrown = new AtomicReference<>();
+		DefaultErrorHandler eh = new DefaultErrorHandler((cr, ex) ->  {
+			thrown.set(ex);
+		}, new FixedBackOff(0L, Long.MAX_VALUE));
+		eh.addNotRetryableExceptions(IllegalArgumentException.class);
+		ConsumerRecords records = new ConsumerRecords(
+				Map.of(new TopicPartition("foo", 0), List.of(new ConsumerRecord("foo", 0, 0L, null, "bar"))));
+		MessageListenerContainer container = mock(MessageListenerContainer.class);
+		given(container.isRunning()).willReturn(true);
+		eh.handleBatch(new IllegalStateException(), records, mock(Consumer.class), container,
+				() -> {
+					throw new ListenerExecutionFailedException("", new IllegalArgumentException());
+				});
+		assertThat(thrown.get()).isInstanceOf(ListenerExecutionFailedException.class)
+				.extracting("cause")
+				.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@SuppressWarnings({ "unchecked", "rawtypes" })
+	@Test
+	void reclassifyUseSameBackOffOnExceptionChange() {
+		AtomicReference<Exception> thrown = new AtomicReference<>();
+		DefaultErrorHandler eh = new DefaultErrorHandler((cr, ex) ->  {
+			thrown.set(ex);
+		}, new FixedBackOff(0L, 3));
+		ConsumerRecords records = new ConsumerRecords(
+				Map.of(new TopicPartition("foo", 0), List.of(new ConsumerRecord("foo", 0, 0L, null, "bar"))));
+		MessageListenerContainer container = mock(MessageListenerContainer.class);
+		given(container.isRunning()).willReturn(true);
+		AtomicInteger retries = new AtomicInteger();
+		eh.handleBatch(new IllegalStateException(), records, mock(Consumer.class), container,
+				() -> {
+					retries.incrementAndGet();
+					throw new ListenerExecutionFailedException("", new IllegalArgumentException());
+				});
+		assertThat(thrown.get()).isInstanceOf(ListenerExecutionFailedException.class)
+				.extracting("cause")
+				.isInstanceOf(IllegalArgumentException.class);
+		assertThat(retries.get()).isEqualTo(3);
+	}
+
 	private boolean getRetryingFieldValue(FallbackBatchErrorHandler errorHandler) {
 		Field field = ReflectionUtils.findField(FallbackBatchErrorHandler.class, "retrying");
 		ReflectionUtils.makeAccessible(field);
 		@SuppressWarnings("unchecked")
-		ThreadLocal<Boolean> value = (ThreadLocal<Boolean>) ReflectionUtils.getField(field, errorHandler);
-		return value.get();
+		Map<Thread, Boolean> value = (Map<Thread, Boolean>) ReflectionUtils.getField(field, errorHandler);
+		return Boolean.TRUE.equals(value.get(Thread.currentThread()));
 	}
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 the original author or authors.
+ * Copyright 2019-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,15 +21,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
+import org.springframework.kafka.test.EmbeddedKafkaZKBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
 
 /**
  * @author Gary Russell
+ * @author Michał Padula
+ *
  * @since 2.3
  *
  */
-@EmbeddedKafka(bootstrapServersProperty = "my.bss.property", count = 2, controlledShutdown = true, partitions = 3)
+@EmbeddedKafka(bootstrapServersProperty = "my.bss.property", count = 2, controlledShutdown = true, partitions = 3,
+		kraft = false)
 public class EmbeddedKafkaConditionTests {
 
 	@Test
@@ -38,6 +42,11 @@ public class EmbeddedKafkaConditionTests {
 		assertThat(KafkaTestUtils.getPropertyValue(broker, "brokerListProperty")).isEqualTo("my.bss.property");
 		assertThat(KafkaTestUtils.getPropertyValue(broker, "controlledShutdown")).isEqualTo(Boolean.TRUE);
 		assertThat(broker.getPartitionsPerTopic()).isEqualTo(3);
+	}
+
+	@Test
+	public void testResolver(EmbeddedKafkaZKBroker broker) {
+		assertThat(broker).isNotNull();
 	}
 
 }

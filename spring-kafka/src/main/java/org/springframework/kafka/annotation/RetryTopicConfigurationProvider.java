@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2021 the original author or authors.
+ * Copyright 2018-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,6 +33,7 @@ import org.springframework.core.annotation.MergedAnnotations.SearchStrategy;
 import org.springframework.core.annotation.RepeatableContainers;
 import org.springframework.core.log.LogAccessor;
 import org.springframework.kafka.retrytopic.RetryTopicConfiguration;
+import org.springframework.lang.Nullable;
 
 
 /**
@@ -42,9 +43,11 @@ import org.springframework.kafka.retrytopic.RetryTopicConfiguration;
  * one from a {@link RetryableTopic} annotation, or from the bean container if no
  * annotation is available.
  *
+ * <p>
  * If beans are found in the container there's a check to determine whether or not the
- * provided topics topics should be handled by any of such instances.
+ * provided topics should be handled by any of such instances.
  *
+ * <p>
  * If the annotation is provided, a
  * {@link org.springframework.kafka.annotation.DltHandler} annotated method is looked up.
  *
@@ -58,10 +61,13 @@ import org.springframework.kafka.retrytopic.RetryTopicConfiguration;
  */
 public class RetryTopicConfigurationProvider {
 
+	@Nullable
 	private final BeanFactory beanFactory;
 
+	@Nullable
 	private final BeanExpressionResolver resolver;
 
+	@Nullable
 	private final BeanExpressionContext expressionContext;
 
 	private static final LogAccessor LOGGER = new LogAccessor(LogFactory.getLog(RetryTopicConfigurationProvider.class));
@@ -71,7 +77,7 @@ public class RetryTopicConfigurationProvider {
 	 * expression context.
 	 * @param beanFactory the bean factory.
 	 */
-	public RetryTopicConfigurationProvider(BeanFactory beanFactory) {
+	public RetryTopicConfigurationProvider(@Nullable BeanFactory beanFactory) {
 		this(beanFactory, new StandardBeanExpressionResolver(), beanFactory instanceof ConfigurableBeanFactory
 				? new BeanExpressionContext((ConfigurableBeanFactory) beanFactory, null)
 				: null); // NOSONAR
@@ -83,13 +89,14 @@ public class RetryTopicConfigurationProvider {
 	 * @param resolver the bean expression resolver.
 	 * @param expressionContext the bean expression context.
 	 */
-	public RetryTopicConfigurationProvider(BeanFactory beanFactory, BeanExpressionResolver resolver,
-			BeanExpressionContext expressionContext) {
+	public RetryTopicConfigurationProvider(@Nullable BeanFactory beanFactory, @Nullable BeanExpressionResolver resolver,
+			@Nullable BeanExpressionContext expressionContext) {
 
 		this.beanFactory = beanFactory;
 		this.resolver = resolver;
 		this.expressionContext = expressionContext;
 	}
+	@Nullable
 	public RetryTopicConfiguration findRetryConfigurationFor(String[] topics, Method method, Object bean) {
 		RetryableTopic annotation = MergedAnnotations.from(method, SearchStrategy.TYPE_HIERARCHY,
 					RepeatableContainers.none())
@@ -102,6 +109,7 @@ public class RetryTopicConfigurationProvider {
 				: maybeGetFromContext(topics);
 	}
 
+	@Nullable
 	private RetryTopicConfiguration maybeGetFromContext(String[] topics) {
 		if (this.beanFactory == null || !ListableBeanFactory.class.isAssignableFrom(this.beanFactory.getClass())) {
 			LOGGER.warn("No ListableBeanFactory found, skipping RetryTopic configuration.");

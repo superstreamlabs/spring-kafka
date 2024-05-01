@@ -1,5 +1,5 @@
 /*
- * Copyright 2021-2022 the original author or authors.
+ * Copyright 2021-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,11 +25,12 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
 
+import org.springframework.core.log.LogAccessor;
+import org.springframework.kafka.support.KafkaUtils;
 import org.springframework.kafka.support.TopicPartitionOffset;
 
 /**
- * Replacement for {@link ErrorHandler} and {@link BatchErrorHandler} and their
- * sub-interfaces.
+ * Listener container error handling contract.
  *
  * @author Gary Russell
  * @since 2.8
@@ -38,28 +39,12 @@ import org.springframework.kafka.support.TopicPartitionOffset;
 public interface CommonErrorHandler extends DeliveryAttemptAware {
 
 	/**
-	 * Return false if this error handler should only receive the current failed record;
-	 * remaining records will be passed to the listener after the error handler returns.
-	 * When true (default), all remaining records including the failed record are passed
-	 * to the error handler.
-	 * @return false to receive only the failed record.
-	 * @deprecated in favor of {@link #seeksAfterHandling()}.
-	 * @see #handleRecord(Exception, ConsumerRecord, Consumer, MessageListenerContainer)
-	 * @see #handleRemaining(Exception, List, Consumer, MessageListenerContainer)
-	 */
-	@Deprecated(since = "2.9", forRemoval = true) // in 3.1
-	default boolean remainingRecords() {
-		return false;
-	}
-
-	/**
 	 * Return true if this error handler performs seeks on the failed record and remaining
 	 * records (or just the remaining records after a failed record is recovered).
 	 * @return true if the next poll should fetch records.
 	 */
-	@SuppressWarnings("deprecation")
 	default boolean seeksAfterHandling() {
-		return remainingRecords();
+		return false;
 	}
 
 	/**
@@ -81,31 +66,11 @@ public interface CommonErrorHandler extends DeliveryAttemptAware {
 	default void handleOtherException(Exception thrownException, Consumer<?, ?> consumer,
 			MessageListenerContainer container, boolean batchListener) {
 
-		LogFactory.getLog(getClass()).error("'handleOtherException' is not implemented by this handler",
-				thrownException);
+		logger().error(thrownException, "'handleOtherException' is not implemented by this handler");
 	}
 
 	/**
-	 * Handle the exception for a record listener when {@link #remainingRecords()} returns
-	 * false. Use this to handle just the single failed record; remaining records from the
-	 * poll will be sent to the listener.
-	 * @param thrownException the exception.
-	 * @param record the record.
-	 * @param consumer the consumer.
-	 * @param container the container.
-	 * @deprecated in favor of
-	 * {@link #handleOne(Exception, ConsumerRecord, Consumer, MessageListenerContainer)}.
-	 * @see #remainingRecords()
-	 */
-	@Deprecated(since = "2.9", forRemoval = true) // in 3.1
-	default void handleRecord(Exception thrownException, ConsumerRecord<?, ?> record, Consumer<?, ?> consumer,
-			MessageListenerContainer container) {
-
-		LogFactory.getLog(getClass()).error("'handleRecord' is not implemented by this handler", thrownException);
-	}
-
-	/**
-	 * Handle the exception for a record listener when {@link #remainingRecords()} returns
+	 * Handle the exception for a record listener when {@link #seeksAfterHandling()} returns
 	 * false. Use this to handle just the single failed record.
 	 * @param thrownException the exception.
 	 * @param record the record.
@@ -114,23 +79,18 @@ public interface CommonErrorHandler extends DeliveryAttemptAware {
 	 * @return true if the error was "handled" or false if not and the container will
 	 * re-submit the record to the listener.
 	 * @since 2.9
-	 * @see #remainingRecords()
+	 * @see #seeksAfterHandling()
 	 */
-	@SuppressWarnings("deprecation")
 	default boolean handleOne(Exception thrownException, ConsumerRecord<?, ?> record, Consumer<?, ?> consumer,
 			MessageListenerContainer container) {
 
-		try {
-			handleRecord(thrownException, record, consumer, container);
-			return true;
-		}
-		catch (Exception ex) {
-			return false;
-		}
+		logger().error(thrownException, () -> "'handleOne' is not implemented by this handler for "
+			+ KafkaUtils.format(record));
+		return true;
 	}
 
 	/**
-	 * Handle the exception for a record listener when {@link #remainingRecords()} returns
+	 * Handle the exception for a record listener when {@link #seeksAfterHandling()} returns
 	 * true. The failed record and all the remaining records from the poll are passed in.
 	 * Usually used when the error handler performs seeks so that the remaining records
 	 * will be redelivered on the next poll.
@@ -138,12 +98,12 @@ public interface CommonErrorHandler extends DeliveryAttemptAware {
 	 * @param records the remaining records including the one that failed.
 	 * @param consumer the consumer.
 	 * @param container the container.
-	 * @see #remainingRecords()
+	 * @see #seeksAfterHandling()
 	 */
 	default void handleRemaining(Exception thrownException, List<ConsumerRecord<?, ?>> records, Consumer<?, ?> consumer,
 			MessageListenerContainer container) {
 
-		LogFactory.getLog(getClass()).error("'handleRemaining' is not implemented by this handler", thrownException);
+		logger().error(thrownException, "'handleRemaining' is not implemented by this handler");
 	}
 
 	/**
@@ -159,7 +119,16 @@ public interface CommonErrorHandler extends DeliveryAttemptAware {
 	default void handleBatch(Exception thrownException, ConsumerRecords<?, ?> data,
 			Consumer<?, ?> consumer, MessageListenerContainer container, Runnable invokeListener) {
 
-		LogFactory.getLog(getClass()).error("'handleBatch' is not implemented by this handler", thrownException);
+		logger().error(thrownException, "'handleBatch' is not implemented by this handler");
+	}
+
+	/**
+	 * Common error handler logger.
+	 * @return the logger.
+	 * @since 3.1
+	 */
+	default LogAccessor logger() {
+		return new LogAccessor(LogFactory.getLog(getClass()));
 	}
 
 	/**

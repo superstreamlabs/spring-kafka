@@ -1,5 +1,5 @@
 /*
- * Copyright 2021-2022 the original author or authors.
+ * Copyright 2021-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -247,7 +247,9 @@ public class RetryTopicExceptionRoutingIntegrationTests {
 		@Autowired
 		CountDownLatchContainer container;
 
-		@RetryableTopic(fixedDelayTopicStrategy = FixedDelayStrategy.SINGLE_TOPIC, backoff = @Backoff(50))
+		@SuppressWarnings("deprecation")
+		@RetryableTopic(sameIntervalTopicReuseStrategy = SameIntervalTopicReuseStrategy.SINGLE_TOPIC,
+				backoff = @Backoff(50))
 		@KafkaListener(topics = FRAMEWORK_FATAL_EXCEPTION_TOPIC)
 		public void listenWithAnnotation(String message, @Header(KafkaHeaders.RECEIVED_TOPIC) String receivedTopic) {
 			container.fatalFrameworkLatch.countDown();
@@ -330,12 +332,13 @@ public class RetryTopicExceptionRoutingIntegrationTests {
 		}
 
 		@Bean
+		@SuppressWarnings("deprecation")
 		public RetryTopicConfiguration onlyTopic(KafkaTemplate<String, String> template) {
 			return RetryTopicConfigurationBuilder
 					.newInstance()
 					.fixedBackOff(50)
 					.includeTopic(ONLY_RETRY_VIA_TOPIC)
-					.useSingleTopicForFixedDelays()
+					.sameIntervalTopicReuseStrategy(SameIntervalTopicReuseStrategy.SINGLE_TOPIC)
 					.doNotRetryOnDltFailure()
 					.dltHandlerMethod("dltProcessorWithError", DLT_METHOD_NAME)
 					.create(template);
