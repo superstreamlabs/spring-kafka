@@ -81,7 +81,7 @@ pipeline {
                 }                
                 withCredentials([string(credentialsId: 'gh_token', variable: 'GH_TOKEN')]) {
                 sh """
-                gh release create $versionTag /tmp/kafka-clients/kafka-client-${env.versionTag}.tar.gz --generate-notes
+                gh release create $versionTag /tmp/kafka-clients/spring-kafka-clients-${env.versionTag}.tar.gz --generate-notes
                 """
                 }                
             }
