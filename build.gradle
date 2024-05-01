@@ -271,6 +271,12 @@ configure(javaProjects) { subproject ->
 		}
 	}
 	}
+    if (shouldSign) {
+      signing {
+        sign publishing.publications.mavenJava
+		// useInMemoryPgpKeys(findProperty('signing.keyId'), findProperty('signing.secretKeyRingFile'), System.getenv('GPG_KEY_PASSWORD'))
+      }
+    }	
   }
 
 	task updateCopyrights {
