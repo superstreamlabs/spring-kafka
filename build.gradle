@@ -48,6 +48,8 @@ ext {
 	linkScmDevConnection = 'git@github.com:spring-projects/spring-kafka.git'
 	springAsciidoctorBackendsVersion = '0.0.3'
 	mavenUrl = project.hasProperty('mavenUrl') ? project.mavenUrl : ''
+	skipSigning = project.hasProperty('skipSigning') && skipSigning.toBoolean()
+	shouldSign = !skipSigning && !version.endsWith("SNAPSHOT")
 
 	javadocLinks = [
 		'https://docs.oracle.com/en/java/javase/17/docs/api/',
