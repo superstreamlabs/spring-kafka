@@ -1,9 +1,13 @@
 buildscript {
-	ext.kotlinVersion = '1.5.31'
+	ext.kotlinVersion = '1.7.20'
+	ext.isCI = System.getenv('GITHUB_ACTION') || System.getenv('bamboo_buildKey')
 	repositories {
 		mavenCentral()
-		maven { url 'https://plugins.gradle.org/m2' }
-		maven { url 'https://repo.spring.io/plugins-release' }
+		gradlePluginPortal()
+		maven { url 'https://repo.spring.io/plugins-release-local' }
+		if (version.endsWith('SNAPSHOT')) {
+			maven { url 'https://repo.spring.io/snapshot' }
+		}
 	}
 	dependencies {
 		classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion"
@@ -26,8 +30,6 @@ plugins {
 }
 
 apply plugin: 'io.spring.nohttp'
-// apply plugin: 'maven-publish'
-// apply plugin: 'signing'
 
 def gitPresent = new File('.git').exists()
 
@@ -44,38 +46,47 @@ ext {
 	linkScmUrl = 'https://github.com/spring-projects/spring-kafka'
 	linkScmConnection = 'https://github.com/spring-projects/spring-kafka.git'
 	linkScmDevConnection = 'git@github.com:spring-projects/spring-kafka.git'
-	docResourcesVersion = '0.2.5'
-    mavenUrl = project.hasProperty('mavenUrl') ? project.mavenUrl : ''
-	skipSigning = project.hasProperty('skipSigning') && skipSigning.toBoolean()
-	shouldSign = !skipSigning && !version.endsWith("SNAPSHOT")
+	springAsciidoctorBackendsVersion = '0.0.3'
+	mavenUrl = project.hasProperty('mavenUrl') ? project.mavenUrl : ''
+
+	javadocLinks = [
+		'https://docs.oracle.com/en/java/javase/17/docs/api/',
+		'https://docs.spring.io/spring-framework/docs/current/javadoc-api/'
+	] as String[]
+
 
 	if (gitPresent) {
 		modifiedFiles =
 			files(grgit.status().unstaged.modified).filter{ f -> f.name.endsWith('.java') || f.name.endsWith('.kt') }
 	}
 
-	assertjVersion = '3.21.0'
-	awaitilityVersion = '4.1.1'
+	assertjVersion = '3.23.1'
+	awaitilityVersion = '4.2.0'
 	googleJsr305Version = '3.0.2'
 	hamcrestVersion = '2.2'
-	hibernateValidationVersion = '6.2.3.Final'
-	jacksonBomVersion = '2.13.2'
-	jaywayJsonPathVersion = '2.4.0'
+	hibernateValidationVersion = '8.0.0.Final'
+	jacksonBomVersion = '2.14.0'
+	jaywayJsonPathVersion = '2.7.0'
 	junit4Version = '4.13.2'
-	junitJupiterVersion = '5.8.2'
-	kafkaVersion = '3.0.1'
-	log4jVersion = '2.17.2'
-	micrometerVersion = '1.8.4'
-	mockitoVersion = '4.0.0'
-	reactorVersion = '2020.0.17'
+	junitJupiterVersion = '5.9.1'
+	kafkaVersion = '3.3.1'
+	log4jVersion = '2.19.0'
+	micrometerDocsVersion = "1.0.0"
+	micrometerVersion = '1.10.2'
+	micrometerTracingVersion = '1.0.0'
+	mockitoVersion = '4.8.1'
+	reactorVersion = '2022.0.1'
 	scalaVersion = '2.13'
-	springBootVersion = '2.5.10' // docs module
-	springDataVersion = '2021.1.3'
-	springRetryVersion = '1.3.2'
-	springVersion = '5.3.17'
+	springBootVersion = '2.6.14' // docs module
+	springDataVersion = '2022.0.0'
+	springRetryVersion = '2.0.0'
+	springVersion = '6.0.3'
 	zookeeperVersion = '3.6.3'
 
 	idPrefix = 'kafka'
+
+	javaProjects = subprojects - project(':spring-kafka-bom')
+
 }
 
 nohttp {
@@ -103,6 +114,8 @@ allprojects {
 			mavenBom "org.springframework:spring-framework-bom:$springVersion"
 			mavenBom "io.projectreactor:reactor-bom:$reactorVersion"
 			mavenBom "org.springframework.data:spring-data-bom:$springDataVersion"
+			mavenBom "io.micrometer:micrometer-bom:$micrometerVersion"
+			mavenBom "io.micrometer:micrometer-tracing-bom:$micrometerTracingVersion"
 		}
 	}
 
@@ -118,10 +131,10 @@ allprojects {
 
 }
 
-subprojects { subproject ->
+configure(javaProjects) { subproject ->
 	apply plugin: 'java-library'
 	apply plugin: 'java'
-	apply from: "${rootProject.projectDir}/publish-maven.gradle"
+	apply from: "${rootProject.projectDir}/gradle/publish-maven.gradle"
 	apply plugin: 'eclipse'
 	apply plugin: 'idea'
 	apply plugin: 'jacoco'
@@ -135,12 +148,6 @@ subprojects { subproject ->
     apply plugin: 'maven-publish'
     apply plugin: 'signing'
 
-    // Add aliases for the task names used by the maven plugin for backwards compatibility
-    // The maven plugin was replaced by the maven-publish plugin in Gradle 7.0
-    tasks.register('install').configure { dependsOn(publishToMavenLocal) }
-    tasks.register('uploadArchives').configure { dependsOn(publish) }
-  }
-
 	java {
 		withJavadocJar()
 		withSourcesJar()
@@ -153,25 +160,25 @@ subprojects { subproject ->
 	}
 
 	compileJava {
-		sourceCompatibility = 1.8
-		targetCompatibility = 1.8
+		sourceCompatibility = 17
+		targetCompatibility = 17
 	}
 
 	compileTestJava {
-		sourceCompatibility = 11
+		sourceCompatibility = 17
 		options.encoding = 'UTF-8'
 	}
 
 	compileTestKotlin {
 		kotlinOptions {
-			jvmTarget = '11'
+			jvmTarget = '17'
 		}
 	}
 
 	eclipse.project.natures += 'org.springframework.ide.eclipse.core.springnature'
 
 	jacoco {
-		toolVersion = '0.8.6'
+		toolVersion = '0.8.7'
 	}
 
 	// dependencies that are common across all java projects
@@ -232,6 +239,7 @@ subprojects { subproject ->
 			xml.destination file("${buildDir}/reports/jacoco/test/jacocoTestReport.xml")
 		}
 	}
+
   if (shouldPublish) {
 	publishing {
       repositories {
@@ -243,44 +251,27 @@ subprojects { subproject ->
           //   password = mavenPassword
           // }
         }
-      }		
+      }
+
+	publishing {
 		publications {
 			mavenJava(MavenPublication) {
-			  from components.java
-	
 				suppressAllPomMetadataWarnings()
+				from components.java
 				pom.withXml {
-					// Check if dependencies node exists and create if not
-					def dependenciesNode = asNode().dependencies.'*'.isEmpty() ? asNode().appendNode('dependencies') : asNode().dependencies.first()
-
-					// Process each dependency
+					def pomDeps = asNode().dependencies.first()
 					subproject.configurations.providedImplementation.allDependencies.each { dep ->
-						def existingDep = dependenciesNode.'*'.find { it.artifactId.text() == dep.name }
-						if (existingDep) {
-							dependenciesNode.remove(existingDep)
-						}
-						dependenciesNode.appendNode('dependency').with {
-							it.appendNode('groupId', dep.group)
-							it.appendNode('artifactId', dep.name)
-							it.appendNode('version', dep.version)
-							it.appendNode('scope', 'provided')
-						}
+						pomDeps.remove(pomDeps.'*'.find { it.artifactId.text() == dep.name })
 					}
 				}
 			}
 		}
 	}
-
-    if (shouldSign) {
-      signing {
-        sign publishing.publications.mavenJava
-		// useInMemoryPgpKeys(findProperty('signing.keyId'), findProperty('signing.secretKeyRingFile'), System.getenv('GPG_KEY_PASSWORD'))
-      }
-    }
+	}
   }
 
 	task updateCopyrights {
-		onlyIf { gitPresent && !System.getenv('GITHUB_ACTION') && !System.getenv('bamboo_buildKey') }
+		onlyIf { !isCI }
 		if (gitPresent) {
 			inputs.files(modifiedFiles.filter { f -> f.path.contains(subproject.name) })
 		}
@@ -326,11 +317,19 @@ subprojects { subproject ->
 		}
 
 		from("${rootProject.projectDir}/src/dist") {
-			include 'license.txt'
 			include 'notice.txt'
 			into 'META-INF'
 			expand(copyright: new Date().format('yyyy'), version: project.version)
-		}		
+		}
+		from("${rootProject.projectDir}") {
+			include 'LICENSE.txt'
+			into 'META-INF'
+		}
+	}
+
+	tasks.withType(Javadoc) {
+		options.addBooleanOption('Xdoclint:syntax', true) // only check syntax with doclint
+		options.addBooleanOption('Werror', true) // fail build on Javadoc warnings
 	}
 
 }
@@ -347,7 +346,6 @@ project ('spring-kafka') {
 		}
 		api "org.apache.kafka:kafka-clients:$kafkaVersion"
 		optionalApi "org.apache.kafka:kafka-streams:$kafkaVersion"
-
 		optionalApi 'com.fasterxml.jackson.core:jackson-core'
 		optionalApi 'com.fasterxml.jackson.core:jackson-databind'
 		optionalApi 'com.fasterxml.jackson.datatype:jackson-datatype-jdk8'
@@ -360,19 +358,55 @@ project ('spring-kafka') {
 		// Spring Data projection message binding support
 		optionalApi ("org.springframework.data:spring-data-commons") {
 			exclude group: 'org.springframework'
+			exclude group: 'io.micrometer'
 		}
 		optionalApi "com.jayway.jsonpath:json-path:$jaywayJsonPathVersion"
 
 		optionalApi 'io.projectreactor:reactor-core'
 		optionalApi 'io.projectreactor.kafka:reactor-kafka'
-		optionalApi "io.micrometer:micrometer-core:$micrometerVersion"
-
-        implementation 'ai.superstream:superstream-java:1.0.0'
+		optionalApi 'io.micrometer:micrometer-core'
+		api 'io.micrometer:micrometer-observation'
+		optionalApi 'io.micrometer:micrometer-tracing'
 
 		testImplementation project (':spring-kafka-test')
 		testImplementation 'io.projectreactor:reactor-test'
 		testImplementation "org.mockito:mockito-junit-jupiter:$mockitoVersion"
 		testImplementation "org.hibernate.validator:hibernate-validator:$hibernateValidationVersion"
+		testImplementation 'io.micrometer:micrometer-observation-test'
+		testImplementation 'io.micrometer:micrometer-tracing-bridge-brave'
+		testImplementation 'io.micrometer:micrometer-tracing-test'
+		testImplementation 'io.micrometer:micrometer-tracing-integration-test'
+
+	}
+
+}
+
+project('spring-kafka-bom') {
+	description = 'Spring for Apache Kafka (Bill of Materials)'
+
+	apply plugin: 'java-platform'
+	apply from: "${rootDir}/gradle/publish-maven.gradle"
+
+	dependencies {
+		constraints {
+			javaProjects.sort { "$it.name" }.each {
+				if (it.name != 'spring-kafka-docs') {
+					api it
+				}
+			}
+		}
+	}
+
+	publishing {
+		publications {
+			mavenJava(MavenPublication) {
+				from components.javaPlatform
+			}
+		}
+	}
+
+	sonarqube {
+		skipProject = true
 	}
 }
 
@@ -396,6 +430,7 @@ project ('spring-kafka-test') {
 		api "org.apache.kafka:kafka_$scalaVersion:$kafkaVersion"
 		api "org.apache.kafka:kafka_$scalaVersion:$kafkaVersion:test"
 		api 'org.junit.jupiter:junit-jupiter-api'
+		api 'org.junit.platform:junit-platform-launcher'
 		optionalApi "org.hamcrest:hamcrest-core:$hamcrestVersion"
 		optionalApi "org.mockito:mockito-core:$mockitoVersion"
 		optionalApi ("junit:junit:$junit4Version") {
@@ -418,7 +453,7 @@ project ('spring-kafka-docs') {
 
 	compileKotlin {
 		kotlinOptions {
-			jvmTarget = '1.8'
+			jvmTarget = '17'
 		}
 	}
 
@@ -439,25 +474,44 @@ sonarqube {
 }
 
 configurations {
-	docs
+	asciidoctorExtensions
+	micrometerDocs
 }
 
 dependencies {
-	docs "io.spring.docresources:spring-doc-resources:${docResourcesVersion}@zip"
+	asciidoctorExtensions "io.spring.asciidoctor.backends:spring-asciidoctor-backends:${springAsciidoctorBackendsVersion}"
+	micrometerDocs "io.micrometer:micrometer-docs-generator:$micrometerDocsVersion"
 }
 
 task prepareAsciidocBuild(type: Sync) {
-	dependsOn configurations.docs
-	from {
-		configurations.docs.collect { zipTree(it) }
-	}
+	dependsOn configurations.asciidoctorExtensions
 	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 	from 'spring-kafka-docs/src/main/asciidoc/','spring-kafka-docs/src/main/java','spring-kafka-docs/src/main/kotlin'
 	into "$buildDir/asciidoc"
 }
 
+def observationInputDir = file('spring-kafka/src/main/java/org/springframework/kafka/support/micrometer').absolutePath
+def generatedDocsDir = file("$buildDir/docs/generated").absolutePath
+
+task generateObservabilityDocs(type: JavaExec) {
+	mainClass = 'io.micrometer.docs.DocsGeneratorCommand'
+	inputs.dir(observationInputDir)
+	outputs.dir(generatedDocsDir)
+	classpath configurations.micrometerDocs
+	args observationInputDir, /.+/, generatedDocsDir
+}
+
+task filterMetricsDocsContent(type: Copy) {
+	dependsOn generateObservabilityDocs
+	from generatedDocsDir
+	include '_*.adoc'
+	into generatedDocsDir
+	rename { filename -> filename.replace '_', '' }
+	filter { line -> line.replaceAll('org.springframework.kafka.support.micrometer.', '').replaceAll('^Fully qualified n', 'N') }
+}
+
 asciidoctorPdf {
-	dependsOn prepareAsciidocBuild
+	dependsOn prepareAsciidocBuild, filterMetricsDocsContent
 	baseDirFollowsSourceFile()
 	configurations 'asciidoctorExt'
 
@@ -505,8 +559,11 @@ asciidoctorj {
 asciidoctor {
 	dependsOn asciidoctorPdf
 	baseDirFollowsSourceFile()
-	configurations 'asciidoctorExt'
+	configurations 'asciidoctorExtensions'
 	sourceDir = file("$buildDir/asciidoc")
+	outputOptions {
+		backends "spring-html"
+	}
 	sources {
 		include '*.adoc'
 	}
@@ -529,16 +586,23 @@ task api(type: Javadoc) {
 	group = 'Documentation'
 	description = 'Generates aggregated Javadoc API documentation.'
 	title = "${rootProject.description} ${version} API"
-	options.memberLevel = org.gradle.external.javadoc.JavadocMemberLevel.PROTECTED
-	options.author = true
-	options.header = rootProject.description
-	options.overview = 'src/api/overview.html'
+	options {
+		encoding = 'UTF-8'
+		memberLevel = org.gradle.external.javadoc.JavadocMemberLevel.PROTECTED
+		author = true
+		header = rootProject.description
+		use = true
+		overview = 'src/api/overview.html'
+		splitIndex = true
+		links(project.ext.javadocLinks)
+		addBooleanOption('Xdoclint:syntax', true) // only check syntax with doclint
+	}
 
-	source subprojects.collect { project ->
+	source javaProjects.collect { project ->
 		project.sourceSets.main.allJava
 	}
 
-	classpath = files(subprojects.collect { project ->
+	classpath = files(javaProjects.collect { project ->
 		project.sourceSets.main.compileClasspath
 	})
 	destinationDir = new File(buildDir, 'api')
@@ -579,8 +643,12 @@ task distZip(type: Zip, dependsOn: [docsZip]) { //, schemaZip]) {
 
 	from('src/dist') {
 		include 'readme.txt'
-		include 'license.txt'
 		include 'notice.txt'
+		into "${baseDir}"
+	}
+
+	from("$project.rootDir") {
+		include 'LICENSE.txt'
 		into "${baseDir}"
 	}
 
@@ -588,13 +656,19 @@ task distZip(type: Zip, dependsOn: [docsZip]) { //, schemaZip]) {
 		into "${baseDir}/docs"
 	}
 
-	subprojects.each { subproject ->
+	javaProjects.each { subproject ->
 		into ("${baseDir}/libs") {
 			from subproject.jar
 			from subproject.sourcesJar
 			from subproject.javadocJar
 		}
 	}
+
+	from(project(':spring-kafka-bom').generatePomFileForMavenJavaPublication) {
+		into "${baseDir}/libs"
+		rename 'pom-default.xml', "spring-kafka-bom-${project.version}.xml"
+	}
+
 }
 
 artifacts {
@@ -607,7 +681,7 @@ task dist(dependsOn: assemble) {
 	description = 'Builds -dist, -docs distribution archives.'
 }
 
-apply from: "${rootProject.projectDir}/publish-maven.gradle"
+apply from: "${rootProject.projectDir}/gradle/publish-maven.gradle"
 
 publishing {
 	publications {

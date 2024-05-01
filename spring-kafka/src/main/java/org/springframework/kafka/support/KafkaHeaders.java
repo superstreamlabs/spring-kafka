@@ -42,14 +42,16 @@ public abstract class KafkaHeaders {
 	public static final String TOPIC = PREFIX + "topic";
 
 	/**
-	 * The header containing the message key when sending data to Kafka.
+	 * The header containing the record key when sending data to Kafka.
+	 * @since 2.9
 	 */
-	public static final String MESSAGE_KEY = PREFIX + "messageKey";
+	public static final String KEY = PREFIX + "messageKey";
 
 	/**
 	 * The header containing the topic partition when sending data to Kafka.
+	 * @since 2.0
 	 */
-	public static final String PARTITION_ID = PREFIX + "partitionId";
+	public static final String PARTITION = PREFIX + "partitionId";
 
 	/**
 	 * The header for the partition offset.
@@ -83,17 +85,20 @@ public abstract class KafkaHeaders {
 	public static final String RECEIVED_TOPIC = RECEIVED + "Topic";
 
 	/**
-	 * The header containing the message key for the received message.
+	 * The header containing the record key from the received message.
+	 * @since 2.9
 	 */
-	public static final String RECEIVED_MESSAGE_KEY = RECEIVED + "MessageKey";
+	public static final String RECEIVED_KEY = RECEIVED + "MessageKey";
 
 	/**
-	 * The header containing the topic partition for the received message.
+	 * The header containing the topic partition from the received message.
+	 * @since 2.9
 	 */
-	public static final String RECEIVED_PARTITION_ID = RECEIVED + "PartitionId";
+	public static final String RECEIVED_PARTITION = RECEIVED + "PartitionId";
 
 	/**
-	 * The header for holding the {@link org.apache.kafka.common.record.TimestampType type} of timestamp.
+	 * The header for holding the {@link org.apache.kafka.common.record.TimestampType
+	 * type} of timestamp.
 	 */
 	public static final String TIMESTAMP_TYPE = PREFIX + "timestampType";
 
@@ -244,7 +249,7 @@ public abstract class KafkaHeaders {
 	 * Exception class name for a record published sent to another topic.
 	 * @since 2.8
 	 */
-	public static final String EXCEPTION_CAUSE_FQCN = PREFIX + "exception-fqcn";
+	public static final String EXCEPTION_CAUSE_FQCN = PREFIX + "exception-cause-fqcn";
 
 	/**
 	 * Exception stack trace for a record published to another topic.

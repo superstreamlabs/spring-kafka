@@ -18,30 +18,24 @@ package org.springframework.kafka.retrytopic;
 
 import java.time.Clock;
 import java.util.Arrays;
-import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
-import org.apache.commons.logging.LogFactory;
-
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.core.log.LogAccessor;
 import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.config.KafkaListenerContainerFactory;
 import org.springframework.kafka.config.KafkaListenerEndpoint;
-import org.springframework.kafka.listener.AcknowledgingConsumerAwareMessageListener;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
 import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.listener.KafkaConsumerBackoffManager;
+import org.springframework.kafka.listener.MessageListener;
 import org.springframework.kafka.listener.adapter.KafkaBackoffAwareMessageListenerAdapter;
 import org.springframework.kafka.support.TopicPartitionOffset;
+import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 import org.springframework.util.backoff.BackOff;
 
@@ -60,36 +54,24 @@ import org.springframework.util.backoff.BackOff;
  * non-retryable endpoints.
  *
  * @author Tomaz Fernandes
+ * @author Gary Russell
  * @since 2.7
  *
  */
 public class ListenerContainerFactoryConfigurer {
 
-	private static final Set<ConcurrentKafkaListenerContainerFactory<?, ?>> CONFIGURED_FACTORIES_CACHE;
+	@Nullable
+	private BackOff providedBlockingBackOff;
 
-	private static final LogAccessor LOGGER = new LogAccessor(
-			LogFactory.getLog(ListenerContainerFactoryConfigurer.class));
+	@Nullable
+	private Class<? extends Exception>[] blockingExceptionTypes;
 
-	static {
-		CONFIGURED_FACTORIES_CACHE = new HashSet<>();
-	}
-
-	private static final int MIN_POLL_TIMEOUT_VALUE = 100;
-
-	private static final int MAX_POLL_TIMEOUT_VALUE = 5000;
-
-	private static final int POLL_TIMEOUT_DIVISOR = 4;
-
-	private static final long LOWEST_BACKOFF_THRESHOLD = 1500L;
-
-	private BackOff providedBlockingBackOff = null;
-
-	private Class<? extends Exception>[] blockingExceptionTypes = null;
+	private boolean retainStandardFatal;
 
 	private Consumer<ConcurrentMessageListenerContainer<?, ?>> containerCustomizer = container -> {
 	};
 
-	private Consumer<CommonErrorHandler> errorHandlerCustomizer = errorHandler -> {
+	private Consumer<DefaultErrorHandler> errorHandlerCustomizer = errorHandler -> {
 	};
 
 	private final DeadLetterPublishingRecovererFactory deadLetterPublishingRecovererFactory;
@@ -100,44 +82,10 @@ public class ListenerContainerFactoryConfigurer {
 
 	public ListenerContainerFactoryConfigurer(KafkaConsumerBackoffManager kafkaConsumerBackoffManager,
 									DeadLetterPublishingRecovererFactory deadLetterPublishingRecovererFactory,
-									@Qualifier(RetryTopicInternalBeanNames
-											.INTERNAL_BACKOFF_CLOCK_BEAN_NAME) Clock clock) {
+									Clock clock) {
 		this.kafkaConsumerBackoffManager = kafkaConsumerBackoffManager;
 		this.deadLetterPublishingRecovererFactory = deadLetterPublishingRecovererFactory;
 		this.clock = clock;
-	}
-
-	/**
-	 * Configures the provided {@link ConcurrentKafkaListenerContainerFactory}.
-	 * @param containerFactory the factory instance to be configured.
-	 * @param configuration the configuration provided by the {@link RetryTopicConfiguration}.
-	 * @return the configured factory instance.
-	 * @deprecated in favor of
-	 * {@link #decorateFactory(ConcurrentKafkaListenerContainerFactory, Configuration)}.
-	 */
-	@Deprecated
-	public ConcurrentKafkaListenerContainerFactory<?, ?> configure(
-			ConcurrentKafkaListenerContainerFactory<?, ?> containerFactory, Configuration configuration) {
-		return isCached(containerFactory)
-				? containerFactory
-				: addToCache(doConfigure(containerFactory, configuration, true));
-	}
-
-	/**
-	 * Configures the provided {@link ConcurrentKafkaListenerContainerFactory}.
-	 * Meant to be used for the main endpoint, this method ignores the provided backOff values.
-	 * @param containerFactory the factory instance to be configured.
-	 * @param configuration the configuration provided by the {@link RetryTopicConfiguration}.
-	 * @return the configured factory instance.
-	 * @deprecated in favor of
-	 * {@link #decorateFactoryWithoutSettingContainerProperties(ConcurrentKafkaListenerContainerFactory, Configuration)}.
-	 */
-	@Deprecated
-	public ConcurrentKafkaListenerContainerFactory<?, ?> configureWithoutBackOffValues(
-			ConcurrentKafkaListenerContainerFactory<?, ?> containerFactory, Configuration configuration) {
-		return isCached(containerFactory)
-				? containerFactory
-				: doConfigure(containerFactory, configuration, false);
 	}
 
 	/**
@@ -199,28 +147,14 @@ public class ListenerContainerFactoryConfigurer {
 		this.blockingExceptionTypes = Arrays.copyOf(exceptionTypes, exceptionTypes.length);
 	}
 
-	private ConcurrentKafkaListenerContainerFactory<?, ?> doConfigure(
-			ConcurrentKafkaListenerContainerFactory<?, ?> containerFactory, Configuration configuration,
-			boolean isSetContainerProperties) {
-
-		containerFactory
-				.setContainerCustomizer(container -> setupBackoffAwareMessageListenerAdapter(container, configuration, isSetContainerProperties));
-		containerFactory
-				.setCommonErrorHandler(createErrorHandler(this.deadLetterPublishingRecovererFactory.create(), configuration));
-		return containerFactory;
-	}
-
-	private boolean isCached(ConcurrentKafkaListenerContainerFactory<?, ?> containerFactory) {
-		synchronized (CONFIGURED_FACTORIES_CACHE) {
-			return CONFIGURED_FACTORIES_CACHE.contains(containerFactory);
-		}
-	}
-
-	private ConcurrentKafkaListenerContainerFactory<?, ?> addToCache(ConcurrentKafkaListenerContainerFactory<?, ?> containerFactory) {
-		synchronized (CONFIGURED_FACTORIES_CACHE) {
-			CONFIGURED_FACTORIES_CACHE.add(containerFactory);
-			return containerFactory;
-		}
+	/**
+	 * Set to true to retain standard fatal exceptions as not retryable when configuring
+	 * blocking retries.
+	 * @param retainStandardFatal true to retain standard fatal exceptions.
+	 * @since 3.0
+	 */
+	public void setRetainStandardFatal(boolean retainStandardFatal) {
+		this.retainStandardFatal = retainStandardFatal;
 	}
 
 	public void setContainerCustomizer(Consumer<ConcurrentMessageListenerContainer<?, ?>> containerCustomizer) {
@@ -228,14 +162,14 @@ public class ListenerContainerFactoryConfigurer {
 		this.containerCustomizer = containerCustomizer;
 	}
 
-	public void setErrorHandlerCustomizer(Consumer<CommonErrorHandler> errorHandlerCustomizer) {
+	public void setErrorHandlerCustomizer(Consumer<DefaultErrorHandler> errorHandlerCustomizer) {
 		this.errorHandlerCustomizer = errorHandlerCustomizer;
 	}
 
 	protected CommonErrorHandler createErrorHandler(DeadLetterPublishingRecoverer deadLetterPublishingRecoverer,
 												Configuration configuration) {
 		DefaultErrorHandler errorHandler = createDefaultErrorHandlerInstance(deadLetterPublishingRecoverer);
-		errorHandler.defaultFalse();
+		errorHandler.defaultFalse(this.retainStandardFatal);
 		errorHandler.setCommitRecovered(true);
 		errorHandler.setLogLevel(KafkaException.Level.DEBUG);
 		if (this.blockingExceptionTypes != null) {
@@ -253,61 +187,13 @@ public class ListenerContainerFactoryConfigurer {
 
 	protected void setupBackoffAwareMessageListenerAdapter(ConcurrentMessageListenerContainer<?, ?> container,
 														Configuration configuration, boolean isSetContainerProperties) {
-		AcknowledgingConsumerAwareMessageListener<?, ?> listener = checkAndCast(container.getContainerProperties()
-				.getMessageListener(), AcknowledgingConsumerAwareMessageListener.class);
-
-		if (isSetContainerProperties && !configuration.backOffValues.isEmpty()) {
-			configurePollTimeoutAndIdlePartitionInterval(container, configuration);
-		}
+		MessageListener<?, ?> listener = checkAndCast(container.getContainerProperties()
+				.getMessageListener(), MessageListener.class);
 
 		container.setupMessageListener(new KafkaBackoffAwareMessageListenerAdapter<>(listener,
 				this.kafkaConsumerBackoffManager, container.getListenerId(), this.clock)); // NOSONAR
 
 		this.containerCustomizer.accept(container);
-	}
-
-	protected void configurePollTimeoutAndIdlePartitionInterval(ConcurrentMessageListenerContainer<?, ?> container,
-															Configuration configuration) {
-
-		ContainerProperties containerProperties = container.getContainerProperties();
-
-		long pollTimeoutValue = getPollTimeoutValue(containerProperties, configuration);
-		long idlePartitionEventInterval = getIdlePartitionInterval(containerProperties, pollTimeoutValue);
-
-		LOGGER.debug(() -> "pollTimeout and idlePartitionEventInterval for back off values "
-				+ configuration.backOffValues + " will be set to " + pollTimeoutValue
-				+ " and " + idlePartitionEventInterval);
-
-		containerProperties
-				.setIdlePartitionEventInterval(idlePartitionEventInterval);
-		containerProperties.setPollTimeout(pollTimeoutValue);
-	}
-
-	protected long getIdlePartitionInterval(ContainerProperties containerProperties, long pollTimeoutValue) {
-		Long idlePartitionEventInterval = containerProperties.getIdlePartitionEventInterval();
-		return idlePartitionEventInterval != null && idlePartitionEventInterval > 0
-				? idlePartitionEventInterval
-				: pollTimeoutValue;
-	}
-
-	protected long getPollTimeoutValue(ContainerProperties containerProperties, Configuration configuration) {
-		if (containerProperties.getPollTimeout() != ContainerProperties.DEFAULT_POLL_TIMEOUT
-				|| configuration.backOffValues.isEmpty()) {
-			return containerProperties.getPollTimeout();
-		}
-
-		Long lowestBackOff = configuration.backOffValues
-				.stream()
-				.min(Comparator.naturalOrder())
-				.orElseThrow(() -> new IllegalArgumentException("No back off values found!"));
-
-		return lowestBackOff > LOWEST_BACKOFF_THRESHOLD
-				? applyLimits(lowestBackOff / POLL_TIMEOUT_DIVISOR)
-				: MIN_POLL_TIMEOUT_VALUE;
-	}
-
-	private long applyLimits(long pollTimeoutValue) {
-		return Math.min(Math.max(pollTimeoutValue, MIN_POLL_TIMEOUT_VALUE), MAX_POLL_TIMEOUT_VALUE);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -322,12 +208,14 @@ public class ListenerContainerFactoryConfigurer {
 			implements KafkaListenerContainerFactory<ConcurrentMessageListenerContainer<?, ?>> {
 
 		private final ConcurrentKafkaListenerContainerFactory<?, ?> delegate;
+
 		private final Configuration configuration;
+
 		private final boolean isSetContainerProperties;
 
 		RetryTopicListenerContainerFactoryDecorator(ConcurrentKafkaListenerContainerFactory<?, ?> delegate,
-														Configuration configuration,
-														boolean isSetContainerProperties) {
+				Configuration configuration, boolean isSetContainerProperties) {
+
 			this.delegate = delegate;
 			this.configuration = configuration;
 			this.isSetContainerProperties = isSetContainerProperties;
@@ -338,12 +226,20 @@ public class ListenerContainerFactoryConfigurer {
 			return decorate(this.delegate.createListenerContainer(endpoint));
 		}
 
-		private ConcurrentMessageListenerContainer<?, ?> decorate(ConcurrentMessageListenerContainer<?, ?> listenerContainer) {
+		private ConcurrentMessageListenerContainer<?, ?> decorate(
+				ConcurrentMessageListenerContainer<?, ?> listenerContainer) {
+
+			String mainListenerId = listenerContainer.getMainListenerId();
+			if (mainListenerId == null) {
+				mainListenerId = listenerContainer.getListenerId();
+			}
 			listenerContainer
 					.setCommonErrorHandler(createErrorHandler(
-							ListenerContainerFactoryConfigurer.this.deadLetterPublishingRecovererFactory.create(),
+							ListenerContainerFactoryConfigurer.this.deadLetterPublishingRecovererFactory
+									.create(mainListenerId),
 							this.configuration));
-			setupBackoffAwareMessageListenerAdapter(listenerContainer, this.configuration, this.isSetContainerProperties);
+			setupBackoffAwareMessageListenerAdapter(listenerContainer, this.configuration,
+					this.isSetContainerProperties);
 			return listenerContainer;
 		}
 

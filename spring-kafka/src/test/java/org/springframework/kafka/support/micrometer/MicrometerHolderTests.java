@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 the original author or authors.
+ * Copyright 2020-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@ package org.springframework.kafka.support.micrometer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -31,6 +30,7 @@ import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
@@ -46,14 +46,15 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
  */
 public class MicrometerHolderTests {
 
-	@SuppressWarnings({ "unchecked" })
+	@SuppressWarnings("unchecked")
 	@Test
 	void testMicrometerHolderRecordSuccessWorksGracefullyAfterDestroy() {
 		MeterRegistry meterRegistry = new SimpleMeterRegistry();
 		ApplicationContext ctx = mock(ApplicationContext.class);
+		ObjectProvider<MeterRegistry> beanProvider = mock(ObjectProvider.class);
+		given(ctx.getBeanProvider(MeterRegistry.class)).willReturn(beanProvider);
 		Timer.Sample sample = mock(Timer.Sample.class);
-		given(ctx.getBeansOfType(any(), anyBoolean(), anyBoolean()))
-				.willReturn(Collections.singletonMap("registry", meterRegistry));
+		given(beanProvider.getIfUnique()).willReturn(meterRegistry);
 
 		MicrometerHolder micrometerHolder = new MicrometerHolder(ctx, "holderName",
 				"timerName", "timerDesc", Collections.emptyMap());
@@ -68,21 +69,24 @@ public class MicrometerHolderTests {
 
 		micrometerHolder.success(sample);
 
-		verify(ctx, times(1)).getBeansOfType(any(), anyBoolean(), anyBoolean());
-		verify(sample, times(1)).stop(any());
+		verify(ctx, times(1)).getBeanProvider(any(Class.class));
+		verify(sample, times(1)).stop(any(Timer.class));
 		verifyNoMoreInteractions(ctx, sample);
 	}
 
 	@Test
 	void multiReg() {
 		assertThatIllegalStateException().isThrownBy(() -> new MicrometerHolder(
-				new AnnotationConfigApplicationContext(Config1.class), "", "", "", Collections.emptyMap()));
+					new AnnotationConfigApplicationContext(Config1.class), "", "", "", Collections.emptyMap()))
+				.withMessage("No micrometer registry present (or more than one and "
+						+ "there is not exactly one marked with @Primary)");
 	}
 
 	@Test
 	void twoPrimaries() {
 		assertThatIllegalStateException().isThrownBy(() -> new MicrometerHolder(
-				new AnnotationConfigApplicationContext(Config2.class), "", "", "", Collections.emptyMap()));
+					new AnnotationConfigApplicationContext(Config2.class), "", "", "", Collections.emptyMap()))
+			.withMessageContaining("more than one 'primary' bean");
 	}
 
 	@Test

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2021 the original author or authors.
+ * Copyright 2016-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ package org.springframework.kafka.retrytopic;
  * to be processed should be forwarded to.
  *
  * @author Tomaz Fernandes
+ * @author Gary Russell
  * @since 2.7
  *
  */
@@ -30,7 +31,7 @@ public interface DestinationTopicResolver extends DestinationTopicContainer {
 	/**
 	 *
 	 * Resolves the destination topic for the failed message.
-	 *
+	 * @param mainListenerId the listener id.
 	 * @param topic the current topic for the message.
 	 * @param attempt the number of processing attempts already made for that message.
 	 * @param e the exception the message processing has thrown
@@ -39,6 +40,7 @@ public interface DestinationTopicResolver extends DestinationTopicContainer {
 	 * @return the {@link DestinationTopic} for the given parameters.
 	 *
 	 */
-	DestinationTopic resolveDestinationTopic(String topic, Integer attempt, Exception e, long originalTimestamp);
+	DestinationTopic resolveDestinationTopic(String mainListenerId, String topic, Integer attempt, Exception e,
+			long originalTimestamp);
 
 }

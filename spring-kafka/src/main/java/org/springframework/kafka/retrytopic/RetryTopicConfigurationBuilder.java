@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2021 the original author or authors.
+ * Copyright 2018-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -68,6 +68,7 @@ public class RetryTopicConfigurationBuilder {
 
 	private String listenerContainerFactoryName;
 
+	@Nullable
 	private BinaryExceptionClassifierBuilder classifierBuilder;
 
 	private FixedDelayStrategy fixedDelayStrategy = FixedDelayStrategy.MULTIPLE_TOPICS;
@@ -78,22 +79,12 @@ public class RetryTopicConfigurationBuilder {
 
 	private TopicSuffixingStrategy topicSuffixingStrategy = TopicSuffixingStrategy.SUFFIX_WITH_DELAY_VALUE;
 
+	@Nullable
 	private Boolean autoStartDltHandler;
 
-	/* ---------------- DLT Behavior -------------- */
-	/**
-	 * Configure a DLT handler method.
-	 * @param clazz the class containing the method.
-	 * @param methodName the method name.
-	 * @return the builder.
-	 * @deprecated in favor of {@link #dltHandlerMethod(String, String)}.
-	 */
-	@Deprecated
-	public RetryTopicConfigurationBuilder dltHandlerMethod(Class<?> clazz, String methodName) {
-		this.dltHandlerMethod = RetryTopicConfigurer.createHandlerMethodWith(clazz, methodName);
-		return this;
-	}
+	private Integer concurrency;
 
+	/* ---------------- DLT Behavior -------------- */
 	/**
 	 * Configure a DLT handler method.
 	 * @param beanName the bean name.
@@ -106,28 +97,52 @@ public class RetryTopicConfigurationBuilder {
 		return this;
 	}
 
-	public RetryTopicConfigurationBuilder dltHandlerMethod(
-			EndpointHandlerMethod endpointHandlerMethod) {
+	/**
+	 * Configure the concurrency for the retry and DLT containers.
+	 * @param concurrency the concurrency.
+	 * @return the builder.
+	 * @since 3.0
+	 */
+	public RetryTopicConfigurationBuilder concurrency(Integer concurrency) {
+		this.concurrency = concurrency;
+		return this;
+	}
 
+	/**
+	 * Configure a DLT handler method.
+	 * @param endpointHandlerMethod the handler method.
+	 * @return the builder.
+	 */
+	public RetryTopicConfigurationBuilder dltHandlerMethod(EndpointHandlerMethod endpointHandlerMethod) {
 		this.dltHandlerMethod = endpointHandlerMethod;
 		return this;
 	}
 
+	/**
+	 * Configure the {@link DltStrategy} to {@link DltStrategy#FAIL_ON_ERROR}.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder doNotRetryOnDltFailure() {
-		this.dltStrategy =
-				DltStrategy.FAIL_ON_ERROR;
+		this.dltStrategy = DltStrategy.FAIL_ON_ERROR;
 		return this;
 	}
 
-	public RetryTopicConfigurationBuilder dltProcessingFailureStrategy(
-			DltStrategy dltStrategy) {
+	/**
+	 * Configure the {@link DltStrategy}.
+	 * @param dltStrategy the strategy.
+	 * @return the builder.
+	 */
+	public RetryTopicConfigurationBuilder dltProcessingFailureStrategy(DltStrategy dltStrategy) {
 		this.dltStrategy = dltStrategy;
 		return this;
 	}
 
+	/**
+	 * Configure the {@link DltStrategy} to {@link DltStrategy#NO_DLT}.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder doNotConfigureDlt() {
-		this.dltStrategy =
-				DltStrategy.NO_DLT;
+		this.dltStrategy = DltStrategy.NO_DLT;
 		return this;
 	}
 
@@ -144,21 +159,41 @@ public class RetryTopicConfigurationBuilder {
 	}
 
 	/* ---------------- Configure Topic GateKeeper -------------- */
+	/**
+	 * Configure the topic names for which to use the target configuration.
+	 * @param topicNames the names.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder includeTopics(List<String> topicNames) {
 		this.includeTopicNames.addAll(topicNames);
 		return this;
 	}
 
+	/**
+	 * Configure the topic names for which the target configuration will NOT be used.
+	 * @param topicNames the names.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder excludeTopics(List<String> topicNames) {
 		this.excludeTopicNames.addAll(topicNames);
 		return this;
 	}
 
+	/**
+	 * Configure a topic name for which to use the target configuration.
+	 * @param topicName the name.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder includeTopic(String topicName) {
 		this.includeTopicNames.add(topicName);
 		return this;
 	}
 
+	/**
+	 * Configure a topic name for which the target configuration will NOT be used.
+	 * @param topicName the name.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder excludeTopic(String topicName) {
 		this.excludeTopicNames.add(topicName);
 		return this;
@@ -166,21 +201,41 @@ public class RetryTopicConfigurationBuilder {
 
 	/* ---------------- Configure Topic Suffixes -------------- */
 
+	/**
+	 * Configure the suffix to add to the retry topics.
+	 * @param suffix the suffix.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder retryTopicSuffix(String suffix) {
 		this.retryTopicSuffix = suffix;
 		return this;
 	}
 
+	/**
+	 * Configure the suffix to add to the DLT topic.
+	 * @param suffix the suffix.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder dltSuffix(String suffix) {
 		this.dltSuffix = suffix;
 		return this;
 	}
 
+	/**
+	 * Configure the retry topic names to be suffixed with ordinal index values.
+	 * @return the builder.
+	 * @see TopicSuffixingStrategy#SUFFIX_WITH_INDEX_VALUE
+	 */
 	public RetryTopicConfigurationBuilder suffixTopicsWithIndexValues() {
 		this.topicSuffixingStrategy = TopicSuffixingStrategy.SUFFIX_WITH_INDEX_VALUE;
 		return this;
 	}
 
+	/**
+	 * Configure the retry topic name {@link TopicSuffixingStrategy}.
+	 * @param topicSuffixingStrategy the strategy.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder setTopicSuffixingStrategy(TopicSuffixingStrategy topicSuffixingStrategy) {
 		this.topicSuffixingStrategy = topicSuffixingStrategy;
 		return this;
@@ -188,6 +243,11 @@ public class RetryTopicConfigurationBuilder {
 
 	/* ---------------- Configure BackOff -------------- */
 
+	/**
+	 * Configure the maximum delivery attempts (including the first).
+	 * @param maxAttempts the attempts.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder maxAttempts(int maxAttempts) {
 		Assert.isTrue(maxAttempts > 0, "Number of attempts should be positive");
 		Assert.isTrue(this.maxAttempts == RetryTopicConstants.NOT_SET,
@@ -196,15 +256,37 @@ public class RetryTopicConfigurationBuilder {
 		return this;
 	}
 
+	/**
+	 * Configure a global timeout, in milliseconds, after which a record will go straight
+	 * to the DLT the next time a listener throws an exception. Default no timeout.
+	 * @param timeout the timeout.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder timeoutAfter(long timeout) {
 		this.timeout = timeout;
 		return this;
 	}
 
+	/**
+	 * Configure an {@link ExponentialBackOffPolicy}.
+	 * @param initialInterval the initial delay interval.
+	 * @param multiplier the multiplier.
+	 * @param maxInterval the maximum delay interval.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder exponentialBackoff(long initialInterval, double multiplier, long maxInterval) {
 		return exponentialBackoff(initialInterval, multiplier, maxInterval, false);
 	}
 
+	/**
+	 * Configure an {@link ExponentialBackOffPolicy} or
+	 * {@link ExponentialRandomBackOffPolicy} depending on the random parameter.
+	 * @param initialInterval the initial delay interval.
+	 * @param multiplier the multiplier.
+	 * @param maxInterval the maximum delay interval.
+	 * @param withRandom true for an {@link ExponentialRandomBackOffPolicy}.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder exponentialBackoff(long initialInterval, double multiplier, long maxInterval,
 			boolean withRandom) {
 
@@ -221,6 +303,11 @@ public class RetryTopicConfigurationBuilder {
 		return this;
 	}
 
+	/**
+	 * Configure a {@link FixedBackOffPolicy}.
+	 * @param interval the interval.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder fixedBackOff(long interval) {
 		Assert.isNull(this.backOffPolicy, ALREADY_SELECTED);
 		Assert.isTrue(interval >= 1, "Interval should be >= 1");
@@ -230,6 +317,12 @@ public class RetryTopicConfigurationBuilder {
 		return this;
 	}
 
+	/**
+	 * Configure a {@link UniformRandomBackOffPolicy}.
+	 * @param minInterval the minimum interval.
+	 * @param maxInterval the maximum interval.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder uniformRandomBackoff(long minInterval, long maxInterval) {
 		Assert.isNull(this.backOffPolicy, ALREADY_SELECTED);
 		Assert.isTrue(minInterval >= 1, "Min interval should be >= 1");
@@ -242,12 +335,21 @@ public class RetryTopicConfigurationBuilder {
 		return this;
 	}
 
+	/**
+	 * Configure a {@link NoBackOffPolicy}.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder noBackoff() {
 		Assert.isNull(this.backOffPolicy, ALREADY_SELECTED);
 		this.backOffPolicy = new NoBackOffPolicy();
 		return this;
 	}
 
+	/**
+	 * Configure a custom {@link SleepingBackOffPolicy}.
+	 * @param backOffPolicy the policy.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder customBackoff(SleepingBackOffPolicy<?> backOffPolicy) {
 		Assert.isNull(this.backOffPolicy, ALREADY_SELECTED);
 		Assert.notNull(backOffPolicy, "You should provide non null custom policy");
@@ -255,36 +357,75 @@ public class RetryTopicConfigurationBuilder {
 		return this;
 	}
 
+
+	/**
+	 * Configure a {@link FixedBackOffPolicy}.
+	 * @param interval the interval.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder fixedBackOff(int interval) {
+		Assert.isNull(this.backOffPolicy, ALREADY_SELECTED);
 		FixedBackOffPolicy policy = new FixedBackOffPolicy();
 		policy.setBackOffPeriod(interval);
 		this.backOffPolicy = policy;
 		return this;
 	}
 
+	/**
+	 * Configure the use of a single retry topic with fixed delays.
+	 * @return the builder.
+	 * @see FixedDelayStrategy#SINGLE_TOPIC
+	 */
 	public RetryTopicConfigurationBuilder useSingleTopicForFixedDelays() {
 		this.fixedDelayStrategy = FixedDelayStrategy.SINGLE_TOPIC;
 		return this;
 	}
 
-	public RetryTopicConfigurationBuilder useSingleTopicForFixedDelays(FixedDelayStrategy useSameTopicForFixedDelays) {
-		this.fixedDelayStrategy = useSameTopicForFixedDelays;
+	/**
+	 * Configure the {@link FixedDelayStrategy}; default is
+	 * {@link FixedDelayStrategy#MULTIPLE_TOPICS}.
+	 * @param delayStrategy the delay strategy.
+	 * @return the builder.
+	 */
+	public RetryTopicConfigurationBuilder useSingleTopicForFixedDelays(FixedDelayStrategy delayStrategy) {
+		this.fixedDelayStrategy = delayStrategy;
 		return this;
 	}
 
 	/* ---------------- Configure Topics Auto Creation -------------- */
 
+	/**
+	 * Configure the topic creation behavior to NOT auto create topics.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder doNotAutoCreateRetryTopics() {
 		this.topicCreationConfiguration = new RetryTopicConfiguration.TopicCreation(false);
 		return this;
 	}
 
+	/**
+	 * Configure the topic creation behavior to auto create topics with the provided
+	 * properties.
+	 * @param numPartitions the number of partitions.
+	 * @param replicationFactor the replication factor (-1 to use the broker default if the
+	 * broker is version 2.4 or later).
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder autoCreateTopicsWith(int numPartitions, short replicationFactor) {
 		this.topicCreationConfiguration = new RetryTopicConfiguration.TopicCreation(true, numPartitions,
 				replicationFactor);
 		return this;
 	}
 
+	/**
+	 * Configure the topic creation behavior to optionall create topics with the provided
+	 * properties.
+	 * @param shouldCreate true to auto create.
+	 * @param numPartitions the number of partitions.
+	 * @param replicationFactor the replication factor (-1 to use the broker default if the
+	 * broker is version 2.4 or later).
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder autoCreateTopics(boolean shouldCreate, int numPartitions,
 			short replicationFactor) {
 
@@ -295,16 +436,31 @@ public class RetryTopicConfigurationBuilder {
 
 	/* ---------------- Configure Exception Classifier -------------- */
 
+	/**
+	 * Configure the behavior to retry on the provided {@link Throwable}.
+	 * @param throwable the throwable.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder retryOn(Class<? extends Throwable> throwable) {
 		classifierBuilder().retryOn(throwable);
 		return this;
 	}
 
+	/**
+	 * Configure the behavior to NOT retry on the provided {@link Throwable}.
+	 * @param throwable the throwable.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder notRetryOn(Class<? extends Throwable> throwable) {
 		classifierBuilder().notRetryOn(throwable);
 		return this;
 	}
 
+	/**
+	 * Configure the behavior to retry on the provided {@link Throwable}s.
+	 * @param throwables the throwables.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder retryOn(List<Class<? extends Throwable>> throwables) {
 		throwables
 				.stream()
@@ -312,6 +468,11 @@ public class RetryTopicConfigurationBuilder {
 		return this;
 	}
 
+	/**
+	 * Configure the behavior to NOT retry on the provided {@link Throwable}s.
+	 * @param throwables the throwables.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder notRetryOn(List<Class<? extends Throwable>> throwables) {
 		throwables
 				.stream()
@@ -319,11 +480,20 @@ public class RetryTopicConfigurationBuilder {
 		return this;
 	}
 
+	/**
+	 * Configure the classifier to traverse the cause chain.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder traversingCauses() {
 		classifierBuilder().traversingCauses();
 		return this;
 	}
 
+	/**
+	 * Configure the classifier to traverse, or not, the cause chain.
+	 * @param traversing true to traverse.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder traversingCauses(boolean traversing) {
 		if (traversing) {
 			classifierBuilder().traversingCauses();
@@ -339,16 +509,31 @@ public class RetryTopicConfigurationBuilder {
 	}
 
 	/* ---------------- Configure KafkaListenerContainerFactory -------------- */
+	/**
+	 * Configure the container factory to use.
+	 * @param factory the factory.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder listenerFactory(ConcurrentKafkaListenerContainerFactory<?, ?> factory) {
 		this.listenerContainerFactory = factory;
 		return this;
 	}
 
+	/**
+	 * Configure the container factory to use via its bean name.
+	 * @param factoryBeanName the factory bean name.
+	 * @return the builder.
+	 */
 	public RetryTopicConfigurationBuilder listenerFactory(String factoryBeanName) {
 		this.listenerContainerFactoryName = factoryBeanName;
 		return this;
 	}
 
+	/**
+	 * Create the {@link RetryTopicConfiguration} with the provided template.
+	 * @param sendToTopicKafkaTemplate the template.
+	 * @return the configuration.
+	 */
 	// The templates are configured per ListenerContainerFactory. Only the first configured ones will be used.
 	public RetryTopicConfiguration create(KafkaOperations<?, ?> sendToTopicKafkaTemplate) {
 
@@ -373,7 +558,7 @@ public class RetryTopicConfigurationBuilder {
 								.createProperties();
 		return new RetryTopicConfiguration(destinationTopicProperties,
 				this.dltHandlerMethod, this.topicCreationConfiguration, allowListManager,
-				factoryResolverConfig, factoryConfigurerConfig);
+				factoryResolverConfig, factoryConfigurerConfig, this.concurrency);
 	}
 
 	private BinaryExceptionClassifier buildClassifier() {

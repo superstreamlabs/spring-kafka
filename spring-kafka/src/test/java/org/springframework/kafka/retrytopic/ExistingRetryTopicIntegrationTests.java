@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 the original author or authors.
+ * Copyright 2021-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,7 +56,9 @@ import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.retry.annotation.Backoff;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
@@ -162,7 +164,7 @@ public class ExistingRetryTopicIntegrationTests {
 		@KafkaListener(id = "firstTopicId", topics = MAIN_TOPIC_WITH_NO_PARTITION_INFO, containerFactory = MAIN_TOPIC_CONTAINER_FACTORY)
 		public void listenFirst(String message, @Header(KafkaHeaders.RECEIVED_TOPIC) String receivedTopic,
 								@Header(KafkaHeaders.ORIGINAL_PARTITION) String originalPartition,
-								@Header(KafkaHeaders.RECEIVED_PARTITION_ID) String receivedPartition) {
+								@Header(KafkaHeaders.RECEIVED_PARTITION) String receivedPartition) {
 			logger.debug("Message {} received in topic {}. originalPartition: {}, receivedPartition: {}",
 					message, receivedTopic, originalPartition, receivedPartition);
 
@@ -182,7 +184,7 @@ public class ExistingRetryTopicIntegrationTests {
 		@KafkaListener(id = "secondTopicId", topics = MAIN_TOPIC_WITH_PARTITION_INFO, containerFactory = MAIN_TOPIC_CONTAINER_FACTORY)
 		public void listenSecond(String message, @Header(KafkaHeaders.RECEIVED_TOPIC) String receivedTopic,
 								@Header(KafkaHeaders.ORIGINAL_PARTITION) String originalPartition,
-								@Header(KafkaHeaders.RECEIVED_PARTITION_ID) String receivedPartition) {
+								@Header(KafkaHeaders.RECEIVED_PARTITION) String receivedPartition) {
 			logger.debug("Message {} received in topic {}. originalPartition: {}, receivedPartition: {}",
 					message, receivedTopic, originalPartition, receivedPartition);
 
@@ -231,11 +233,10 @@ public class ExistingRetryTopicIntegrationTests {
 		}
 	}
 
-
 	@Configuration
 	public static class RuntimeConfig {
 
-		@Bean(name = RetryTopicInternalBeanNames.INTERNAL_BACKOFF_CLOCK_BEAN_NAME)
+		@Bean(name = "internalBackOffClock")
 		public Clock clock() {
 			return Clock.systemUTC();
 		}
@@ -292,7 +293,7 @@ public class ExistingRetryTopicIntegrationTests {
 
 	@EnableKafka
 	@Configuration
-	public static class KafkaConsumerConfig {
+	public static class KafkaConsumerConfig extends RetryTopicConfigurationSupport {
 
 		@Autowired
 		EmbeddedKafkaBroker broker;
@@ -351,6 +352,12 @@ public class ExistingRetryTopicIntegrationTests {
 			factory.setConcurrency(1);
 			return factory;
 		}
+
+		@Bean
+		TaskScheduler sched() {
+			return new ThreadPoolTaskScheduler();
+		}
+
 	}
 
 }

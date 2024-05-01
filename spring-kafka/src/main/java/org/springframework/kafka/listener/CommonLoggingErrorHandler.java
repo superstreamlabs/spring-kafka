@@ -22,6 +22,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 
 import org.springframework.core.log.LogAccessor;
+import org.springframework.kafka.support.KafkaUtils;
 
 /**
  * The {@link CommonErrorHandler} implementation for logging exceptions.
@@ -46,22 +47,21 @@ public class CommonLoggingErrorHandler implements CommonErrorHandler {
 		this.ackAfterHandle = ackAfterHandle;
 	}
 
-	@SuppressWarnings("deprecation")
 	@Override
+	@Deprecated(since = "2.9", forRemoval = true) // in 3.1
 	public void handleRecord(Exception thrownException, ConsumerRecord<?, ?> record, Consumer<?, ?> consumer,
 			MessageListenerContainer container) {
 
-		LOGGER.error(thrownException, () -> "Error occured while processing: " + ListenerUtils.recordToString(record));
+		LOGGER.error(thrownException, () -> "Error occured while processing: " + KafkaUtils.format(record));
 	}
 
-	@SuppressWarnings("deprecation")
 	@Override
 	public void handleBatch(Exception thrownException, ConsumerRecords<?, ?> data, Consumer<?, ?> consumer,
 			MessageListenerContainer container, Runnable invokeListener) {
 
 		StringBuilder message = new StringBuilder("Error occurred while processing:\n");
 		for (ConsumerRecord<?, ?> record : data) {
-			message.append(ListenerUtils.recordToString(record)).append('\n');
+			message.append(KafkaUtils.format(record)).append('\n');
 		}
 		LOGGER.error(thrownException, () -> message.substring(0, message.length() - 1));
 	}

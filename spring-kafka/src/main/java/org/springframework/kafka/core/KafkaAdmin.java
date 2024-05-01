@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2021 the original author or authors.
+ * Copyright 2017-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,21 +22,34 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import org.apache.commons.logging.LogFactory;
 import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.AlterConfigOp;
+import org.apache.kafka.clients.admin.AlterConfigOp.OpType;
+import org.apache.kafka.clients.admin.AlterConfigsResult;
+import org.apache.kafka.clients.admin.Config;
+import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.clients.admin.CreatePartitionsResult;
 import org.apache.kafka.clients.admin.CreateTopicsResult;
+import org.apache.kafka.clients.admin.DescribeConfigsResult;
 import org.apache.kafka.clients.admin.DescribeTopicsResult;
 import org.apache.kafka.clients.admin.NewPartitions;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.common.config.ConfigResource;
+import org.apache.kafka.common.config.ConfigResource.Type;
 import org.apache.kafka.common.errors.InvalidPartitionsException;
 import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.errors.UnsupportedVersionException;
@@ -47,6 +60,8 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.core.log.LogAccessor;
 import org.springframework.kafka.KafkaException;
+import org.springframework.kafka.support.TopicForRetryable;
+import org.springframework.lang.Nullable;
 
 /**
  * An admin that delegates to an {@link AdminClient} to create topics defined
@@ -82,6 +97,10 @@ public class KafkaAdmin extends KafkaResourceFactory
 	private boolean autoCreate = true;
 
 	private boolean initializingContext;
+
+	private boolean modifyTopicConfigs;
+
+	private String clusterId;
 
 	/**
 	 * Create an instance with an {@link AdminClient} based on the supplied
@@ -131,6 +150,16 @@ public class KafkaAdmin extends KafkaResourceFactory
 		this.autoCreate = autoCreate;
 	}
 
+	/**
+	 * Set to true to compare the current topic configuration properties with those in the
+	 * {@link NewTopic} bean, and update if different.
+	 * @param modifyTopicConfigs true to check and update configs if necessary.
+	 * @since 2.8.7
+	 */
+	public void setModifyTopicConfigs(boolean modifyTopicConfigs) {
+		this.modifyTopicConfigs = modifyTopicConfigs;
+	}
+
 	@Override
 	public Map<String, Object> getConfigurationProperties() {
 		Map<String, Object> configs2 = new HashMap<>(this.configs);
@@ -156,10 +185,7 @@ public class KafkaAdmin extends KafkaResourceFactory
 	 * @see #setAutoCreate(boolean)
 	 */
 	public final boolean initialize() {
-		Collection<NewTopic> newTopics = new ArrayList<>(
-				this.applicationContext.getBeansOfType(NewTopic.class, false, false).values());
-		Collection<NewTopics> wrappers = this.applicationContext.getBeansOfType(NewTopics.class, false, false).values();
-		wrappers.forEach(wrapper -> newTopics.addAll(wrapper.getNewTopics()));
+		Collection<NewTopic> newTopics = newTopics();
 		if (newTopics.size() > 0) {
 			AdminClient adminClient = null;
 			try {
@@ -175,15 +201,22 @@ public class KafkaAdmin extends KafkaResourceFactory
 			}
 			if (adminClient != null) {
 				try {
+					synchronized (this) {
+						this.clusterId = adminClient.describeCluster().clusterId().get(this.operationTimeout,
+								TimeUnit.SECONDS);
+					}
 					addOrModifyTopicsIfNeeded(adminClient, newTopics);
 					return true;
 				}
-				catch (Exception e) {
+				catch (InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+				catch (Exception ex) {
 					if (!this.initializingContext || this.fatalIfBrokerNotAvailable) {
-						throw new IllegalStateException("Could not configure topics", e);
+						throw new IllegalStateException("Could not configure topics", ex);
 					}
 					else {
-						LOGGER.error(e, "Could not configure topics");
+						LOGGER.error(ex, "Could not configure topics");
 					}
 				}
 				finally {
@@ -194,6 +227,57 @@ public class KafkaAdmin extends KafkaResourceFactory
 		}
 		this.initializingContext = false;
 		return false;
+	}
+
+	/*
+	 * Remove any TopicForRetryable bean if there is also a NewTopic with the same topic name.
+	 */
+	private Collection<NewTopic> newTopics() {
+		Map<String, NewTopic> newTopicsMap = new HashMap<>(
+				this.applicationContext.getBeansOfType(NewTopic.class, false, false));
+		Map<String, NewTopics> wrappers = this.applicationContext.getBeansOfType(NewTopics.class, false, false);
+		AtomicInteger count = new AtomicInteger();
+		wrappers.forEach((name, newTopics) -> {
+			newTopics.getNewTopics().forEach(nt -> newTopicsMap.put(name + "#" + count.getAndIncrement(), nt));
+		});
+		Map<String, NewTopic> topicsForRetry = newTopicsMap.entrySet().stream()
+				.filter(entry -> entry.getValue() instanceof TopicForRetryable)
+				.collect(Collectors.toMap(Entry::getKey, Entry::getValue));
+		for (Entry<String, NewTopic> entry : topicsForRetry.entrySet()) {
+			Iterator<Entry<String, NewTopic>> iterator = newTopicsMap.entrySet().iterator();
+			boolean remove = false;
+			while (iterator.hasNext()) {
+				Entry<String, NewTopic> nt = iterator.next();
+				// if we have a NewTopic and TopicForRetry with the same name, remove the latter
+				if (nt.getValue().name().equals(entry.getValue().name())
+						&& !(nt.getValue() instanceof TopicForRetryable)) {
+
+					remove = true;
+					break;
+				}
+			}
+			if (remove) {
+				newTopicsMap.remove(entry.getKey());
+			}
+		}
+		return new ArrayList<>(newTopicsMap.values());
+	}
+
+	@Override
+	@Nullable
+	public String clusterId() {
+		if (this.clusterId == null) {
+			try (AdminClient client = createAdmin()) {
+				this.clusterId = client.describeCluster().clusterId().get(this.operationTimeout, TimeUnit.SECONDS);
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+			catch (Exception ex) {
+				LOGGER.error(ex, "Could not obtaine cluster info");
+			}
+		}
+		return this.clusterId;
 	}
 
 	@Override
@@ -209,7 +293,7 @@ public class KafkaAdmin extends KafkaResourceFactory
 			Map<String, TopicDescription> results = new HashMap<>();
 			DescribeTopicsResult topics = admin.describeTopics(Arrays.asList(topicNames));
 			try {
-				results.putAll(topics.all().get(this.operationTimeout, TimeUnit.SECONDS));
+				results.putAll(topics.allTopicNames().get(this.operationTimeout, TimeUnit.SECONDS));
 				return results;
 			}
 			catch (InterruptedException ie) {
@@ -237,13 +321,103 @@ public class KafkaAdmin extends KafkaResourceFactory
 							.map(NewTopic::name)
 							.collect(Collectors.toList()));
 			List<NewTopic> topicsToAdd = new ArrayList<>();
-			Map<String, NewPartitions> topicsToModify = checkPartitions(topicNameToTopic, topicInfo, topicsToAdd);
+			Map<String, NewPartitions> topicsWithPartitionMismatches =
+					checkPartitions(topicNameToTopic, topicInfo, topicsToAdd);
 			if (topicsToAdd.size() > 0) {
 				addTopics(adminClient, topicsToAdd);
 			}
-			if (topicsToModify.size() > 0) {
-				modifyTopics(adminClient, topicsToModify);
+			if (topicsWithPartitionMismatches.size() > 0) {
+				createMissingPartitions(adminClient, topicsWithPartitionMismatches);
 			}
+			if (this.modifyTopicConfigs) {
+				List<NewTopic> toCheck = new LinkedList<>(topics);
+				toCheck.removeAll(topicsToAdd);
+				Map<ConfigResource, List<ConfigEntry>> mismatchingConfigs =
+						checkTopicsForConfigMismatches(adminClient, toCheck);
+				if (!mismatchingConfigs.isEmpty()) {
+					adjustConfigMismatches(adminClient, topics, mismatchingConfigs);
+				}
+			}
+		}
+	}
+
+	private Map<ConfigResource, List<ConfigEntry>> checkTopicsForConfigMismatches(
+			AdminClient adminClient, Collection<NewTopic> topics) {
+
+		List<ConfigResource> configResources = topics.stream()
+				.map(topic -> new ConfigResource(Type.TOPIC, topic.name()))
+				.collect(Collectors.toList());
+
+		DescribeConfigsResult describeConfigsResult = adminClient.describeConfigs(configResources);
+		try {
+			Map<ConfigResource, Config> topicsConfig = describeConfigsResult.all()
+					.get(this.operationTimeout, TimeUnit.SECONDS);
+
+			Map<ConfigResource, List<ConfigEntry>> configMismatches = new HashMap<>();
+			for (Map.Entry<ConfigResource, Config> topicConfig : topicsConfig.entrySet()) {
+				Optional<NewTopic> topicOptional = topics.stream()
+						.filter(p -> p.name().equals(topicConfig.getKey().name()))
+						.findFirst();
+
+				List<ConfigEntry> configMismatchesEntries = new ArrayList<>();
+				if (topicOptional.isPresent() && topicOptional.get().configs() != null) {
+					for (Map.Entry<String, String> desiredConfigParameter : topicOptional.get().configs().entrySet()) {
+						ConfigEntry actualConfigParameter = topicConfig.getValue().get(desiredConfigParameter.getKey());
+						if (!desiredConfigParameter.getValue().equals(actualConfigParameter.value())) {
+							configMismatchesEntries.add(actualConfigParameter);
+						}
+					}
+					if (configMismatchesEntries.size() > 0) {
+						configMismatches.put(topicConfig.getKey(), configMismatchesEntries);
+					}
+				}
+			}
+			return configMismatches;
+		}
+		catch (InterruptedException ie) {
+			Thread.currentThread().interrupt();
+			throw new KafkaException("Interrupted while getting topic descriptions:" + topics, ie);
+		}
+		catch (ExecutionException | TimeoutException ex) {
+			throw new KafkaException("Failed to obtain topic descriptions:" + topics, ex);
+		}
+	}
+
+	private void adjustConfigMismatches(AdminClient adminClient, Collection<NewTopic> topics,
+			Map<ConfigResource, List<ConfigEntry>> mismatchingConfigs) {
+		for (Map.Entry<ConfigResource, List<ConfigEntry>> mismatchingConfigsOfTopic : mismatchingConfigs.entrySet()) {
+			ConfigResource topicConfigResource = mismatchingConfigsOfTopic.getKey();
+
+			Optional<NewTopic> topicOptional = topics.stream().filter(p -> p.name().equals(topicConfigResource.name()))
+					.findFirst();
+			if (topicOptional.isPresent()) {
+				for (ConfigEntry mismatchConfigEntry : mismatchingConfigsOfTopic.getValue()) {
+					List<AlterConfigOp> alterConfigOperations = new ArrayList<>();
+					Map<String, String> desiredConfigs = topicOptional.get().configs();
+					if (desiredConfigs.get(mismatchConfigEntry.name()) != null) {
+						alterConfigOperations.add(
+								new AlterConfigOp(
+										new ConfigEntry(mismatchConfigEntry.name(),
+												desiredConfigs.get(mismatchConfigEntry.name())),
+										OpType.SET));
+					}
+					if (alterConfigOperations.size() > 0) {
+						try {
+							AlterConfigsResult alterConfigsResult = adminClient
+									.incrementalAlterConfigs(Map.of(topicConfigResource, alterConfigOperations));
+							alterConfigsResult.all().get(this.operationTimeout, TimeUnit.SECONDS);
+						}
+						catch (InterruptedException ie) {
+							Thread.currentThread().interrupt();
+							throw new KafkaException("Interrupted while getting topic descriptions", ie);
+						}
+						catch (ExecutionException | TimeoutException ex) {
+							throw new KafkaException("Failed to obtain topic descriptions", ex);
+						}
+					}
+				}
+			}
+
 		}
 	}
 
@@ -251,7 +425,7 @@ public class KafkaAdmin extends KafkaResourceFactory
 			DescribeTopicsResult topicInfo, List<NewTopic> topicsToAdd) {
 
 		Map<String, NewPartitions> topicsToModify = new HashMap<>();
-		topicInfo.values().forEach((n, f) -> {
+		topicInfo.topicNameValues().forEach((n, f) -> {
 			NewTopic topic = topicNameToTopic.get(n);
 			try {
 				TopicDescription topicDescription = f.get(this.operationTimeout, TimeUnit.SECONDS);
@@ -304,7 +478,7 @@ public class KafkaAdmin extends KafkaResourceFactory
 		}
 	}
 
-	private void modifyTopics(AdminClient adminClient, Map<String, NewPartitions> topicsToModify) {
+	private void createMissingPartitions(AdminClient adminClient, Map<String, NewPartitions> topicsToModify) {
 		CreatePartitionsResult partitionsResult = adminClient.createPartitions(topicsToModify);
 		try {
 			partitionsResult.all().get(this.operationTimeout, TimeUnit.SECONDS);

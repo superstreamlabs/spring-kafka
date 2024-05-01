@@ -19,14 +19,21 @@ package org.springframework.kafka.listener;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -41,6 +48,7 @@ import org.mockito.InOrder;
 import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.support.converter.ConversionException;
 import org.springframework.kafka.support.serializer.DeserializationException;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.util.backoff.FixedBackOff;
 
 /**
@@ -53,10 +61,69 @@ import org.springframework.util.backoff.FixedBackOff;
  */
 public class DefaultErrorHandlerRecordTests {
 
-	@SuppressWarnings("deprecation")
 	@Test
-	public void testClassifier() {
-		ListenerUtils.setLogOnlyMetadata(true);
+	void noSeeks() {
+		AtomicReference<ConsumerRecord<?, ?>> recovered = new AtomicReference<>();
+		AtomicBoolean recovererShouldFail = new AtomicBoolean(false);
+		DefaultErrorHandler handler = new DefaultErrorHandler((r, t) -> {
+			if (recovererShouldFail.getAndSet(false)) {
+				throw new RuntimeException("test recoverer failure");
+			}
+			recovered.set(r);
+		});
+		handler.setSeekAfterError(false);
+		AtomicInteger failedDeliveryAttempt = new AtomicInteger();
+		AtomicReference<Exception> recoveryFailureEx = new AtomicReference<>();
+		AtomicBoolean isRecovered = new AtomicBoolean();
+		handler.setRetryListeners(new RetryListener() {
+
+			@Override
+			public void failedDelivery(ConsumerRecord<?, ?> record, Exception ex, int deliveryAttempt) {
+				failedDeliveryAttempt.set(deliveryAttempt);
+			}
+
+			@Override
+			public void recovered(ConsumerRecord<?, ?> record, Exception ex) {
+				isRecovered.set(true);
+			}
+
+			@Override
+			public void recoveryFailed(ConsumerRecord<?, ?> record, Exception original, Exception failure) {
+				recoveryFailureEx.set(failure);
+			}
+
+		});
+		ConsumerRecord<String, String> record1 = new ConsumerRecord<>("foo", 0, 0L, "foo", "bar");
+		ConsumerRecord<String, String> record2 = new ConsumerRecord<>("foo", 1, 1L, "foo", "bar");
+		List<ConsumerRecord<?, ?>> records = Arrays.asList(record1, record2);
+		IllegalStateException illegalState = new IllegalStateException();
+		Consumer<?, ?> consumer = mock(Consumer.class);
+		assertThat(handler.handleOne(illegalState, record1, consumer, mock(MessageListenerContainer.class))).isFalse();
+		assertThat(handler.handleOne(new DeserializationException("intended", null, false, illegalState), record1,
+				consumer, mock(MessageListenerContainer.class))).isTrue();
+		assertThat(recovered.get()).isSameAs(record1);
+		recovered.set(null);
+		assertThat(handler.handleOne(new ConversionException("intended", null), record1,
+				consumer, mock(MessageListenerContainer.class))).isTrue();
+		assertThat(recovered.get()).isSameAs(record1);
+		handler.addNotRetryableExceptions(IllegalStateException.class);
+		recovered.set(null);
+		recovererShouldFail.set(true);
+		assertThat(handler.handleOne(illegalState, record1, consumer, mock(MessageListenerContainer.class))).isFalse();
+		assertThat(handler.handleOne(new DeserializationException("intended", null, false, illegalState), record1,
+				consumer, mock(MessageListenerContainer.class))).isTrue();
+		assertThat(recovered.get()).isSameAs(record1);
+		verify(consumer, never()).seek(any(), anyLong());
+		assertThat(failedDeliveryAttempt.get()).isEqualTo(1);
+		assertThat(recoveryFailureEx.get())
+				.isInstanceOf(RuntimeException.class)
+				.extracting(ex -> ex.getMessage())
+				.isEqualTo("test recoverer failure");
+		assertThat(isRecovered.get()).isTrue();
+	}
+
+	@Test
+	void testClassifier() {
 		AtomicReference<ConsumerRecord<?, ?>> recovered = new AtomicReference<>();
 		AtomicBoolean recovererShouldFail = new AtomicBoolean(false);
 		DefaultErrorHandler handler = new DefaultErrorHandler((r, t) -> {
@@ -169,6 +236,36 @@ public class DefaultErrorHandlerRecordTests {
 		assertThatExceptionOfType(KafkaException.class).isThrownBy(() -> handler.handleRemaining(illegalState,
 						records, consumer, container));
 		assertThat(System.currentTimeMillis() >= t1 + 200);
+	}
+
+	@Test
+	void pausingBackOff() throws InterruptedException {
+		ThreadPoolTaskScheduler sched = new ThreadPoolTaskScheduler();
+		sched.initialize();
+		ListenerContainerPauseService pauser = new ListenerContainerPauseService(null, sched);
+		DefaultErrorHandler handler = new DefaultErrorHandler((rec, ex) -> { }, new FixedBackOff(200L, 1L),
+				new ContainerPausingBackOffHandler(pauser));
+		MessageListenerContainer container = mock(MessageListenerContainer.class);
+		CountDownLatch latch = new CountDownLatch(1);
+		AtomicBoolean paused = new AtomicBoolean();
+		willAnswer(inv -> {
+			return paused.get();
+		}).given(container).isPauseRequested();
+		willAnswer(inv -> {
+			paused.set(true);
+			return null;
+		}).given(container).pause();
+		willAnswer(inv -> {
+			paused.set(false);
+			latch.countDown();
+			return null;
+		}).given(container).resume();
+		ConsumerRecord<String, String> record1 = new ConsumerRecord<>("foo", 0, 0L, "foo", "bar");
+		long t1 = System.currentTimeMillis();
+		handler.handleOne(new RuntimeException(), record1, mock(Consumer.class), container);
+		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(System.currentTimeMillis() - t1).isGreaterThanOrEqualTo(200L);
+		sched.destroy();
 	}
 
 }

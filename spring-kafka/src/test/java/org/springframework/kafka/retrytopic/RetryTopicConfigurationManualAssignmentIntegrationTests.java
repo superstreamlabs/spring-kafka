@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 the original author or authors.
+ * Copyright 2021-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,6 +46,8 @@ import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
@@ -84,7 +86,7 @@ class RetryTopicConfigurationManualAssignmentIntegrationTests {
 
 	@Configuration(proxyBeanMethods = false)
 	@EnableKafka
-	static class Config {
+	static class Config extends RetryTopicConfigurationSupport {
 
 		private final CountDownLatch latch = new CountDownLatch(1);
 
@@ -134,14 +136,18 @@ class RetryTopicConfigurationManualAssignmentIntegrationTests {
 			return new KafkaAdmin(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, broker.getBrokersAsString()));
 		}
 
-		@SuppressWarnings("deprecation")
 		@Bean
 		RetryTopicConfiguration retryTopicConfiguration1(KafkaTemplate<Integer, String> template) {
 			return RetryTopicConfigurationBuilder.newInstance()
 					.includeTopics(List.of(TOPIC1, TOPIC2))
 					.exponentialBackoff(100, 1.1, 110)
-					.dltHandlerMethod(getClass(), "dlt")
+					.dltHandlerMethod("retryTopicConfigurationManualAssignmentIntegrationTests.Config", "dlt")
 					.create(template);
+		}
+
+		@Bean
+		TaskScheduler sched() {
+			return new ThreadPoolTaskScheduler();
 		}
 
 	}

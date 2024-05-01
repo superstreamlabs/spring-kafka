@@ -18,6 +18,8 @@ package org.springframework.kafka.retrytopic;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -52,6 +54,8 @@ import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.retry.annotation.Backoff;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Component;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
@@ -80,7 +84,7 @@ public class RetryTopicSameContainerFactoryIntegrationTests {
 	private CountDownLatchContainer latchContainer;
 
 	@Test
-	void shouldRetryFirstAndSecondTopics() {
+	void shouldRetryFirstAndSecondTopics(@Autowired RetryTopicComponentFactory componentFactory) {
 		logger.debug("Sending message to topic " + FIRST_TOPIC);
 		sendKafkaTemplate.send(FIRST_TOPIC, "Testing topic 1");
 		logger.debug("Sending message to topic " + SECOND_TOPIC);
@@ -89,6 +93,7 @@ public class RetryTopicSameContainerFactoryIntegrationTests {
 		assertThat(awaitLatch(latchContainer.countDownLatchDltOne)).isTrue();
 		assertThat(awaitLatch(latchContainer.countDownLatch2)).isTrue();
 		assertThat(awaitLatch(latchContainer.customizerLatch)).isTrue();
+		verify(componentFactory).destinationTopicResolver();
 	}
 
 	private boolean awaitLatch(CountDownLatch latch) {
@@ -150,7 +155,7 @@ public class RetryTopicSameContainerFactoryIntegrationTests {
 
 	@EnableKafka
 	@Configuration
-	static class Config {
+	static class Config extends RetryTopicConfigurationSupport {
 
 		@Autowired
 		EmbeddedKafkaBroker broker;
@@ -232,5 +237,17 @@ public class RetryTopicSameContainerFactoryIntegrationTests {
 
 			return new DefaultKafkaConsumerFactory<>(props);
 		}
+
+		@Bean
+		TaskScheduler sched() {
+			return new ThreadPoolTaskScheduler();
+		}
+
+		@Bean
+		RetryTopicComponentFactory componentFactory() {
+			return spy(new RetryTopicComponentFactory());
+		}
+
 	}
+
 }

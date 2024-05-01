@@ -33,8 +33,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -43,6 +45,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.BeforeAll;
@@ -149,7 +152,8 @@ public class ConcurrentMessageListenerContainerTests {
 				new ConcurrentMessageListenerContainer<>(cf, containerProps);
 		container.setConcurrency(2);
 		container.setBeanName("testAuto");
-		List<KafkaEvent> events = new ArrayList<>();
+		container.setChangeConsumerThreadName(true);
+		BlockingQueue<KafkaEvent> events = new LinkedBlockingQueue<>();
 		CountDownLatch stopLatch = new CountDownLatch(4);
 		container.setApplicationEventPublisher(e -> {
 			events.add((KafkaEvent) e);
@@ -158,7 +162,7 @@ public class ConcurrentMessageListenerContainerTests {
 			}
 		});
 		CountDownLatch intercepted = new CountDownLatch(4);
-		container.setRecordInterceptor(record -> {
+		container.setRecordInterceptor((record, consumer) -> {
 			intercepted.countDown();
 			return record.value().equals("baz") ? null : record;
 		});
@@ -175,17 +179,15 @@ public class ConcurrentMessageListenerContainerTests {
 		ProducerFactory<Integer, String> pf = new DefaultKafkaProducerFactory<>(senderProps);
 		KafkaTemplate<Integer, String> template = new KafkaTemplate<>(pf);
 		template.setDefaultTopic(topic1);
-		template.sendDefault(0, "foo");
-		template.sendDefault(2, "bar");
-		template.sendDefault(0, "baz");
-		template.sendDefault(2, "qux");
+		template.sendDefault(0, 0, "foo");
+		template.sendDefault(1, 2, "bar");
+		template.sendDefault(0, 0, "baz");
+		template.sendDefault(1, 2, "qux");
 		template.flush();
 		assertThat(intercepted.await(10, TimeUnit.SECONDS)).isTrue();
 		assertThat(latch.await(60, TimeUnit.SECONDS)).isTrue();
 		assertThat(payloads).containsExactlyInAnyOrder("foo", "bar", "qux");
-		for (String threadName : listenerThreadNames) {
-			assertThat(threadName).contains("-C-");
-		}
+		assertThat(listenerThreadNames).contains("testAuto-0", "testAuto-1");
 		List<KafkaMessageListenerContainer<Integer, String>> containers = KafkaTestUtils.getPropertyValue(container,
 				"containers", List.class);
 		assertThat(containers).hasSize(2);
@@ -620,8 +622,15 @@ public class ConcurrentMessageListenerContainerTests {
 				new ConcurrentMessageListenerContainer<>(cf, containerProps);
 		container.setConcurrency(2);
 		container.setBeanName("testException");
-		container.setErrorHandler((thrownException, record) -> catchError.set(true));
+		container.setCommonErrorHandler(new CommonErrorHandler() {
 
+			@Override
+			public void handleRecord(Exception thrownException, ConsumerRecord<?, ?> record, Consumer<?, ?> consumer,
+					MessageListenerContainer container) {
+
+				catchError.set(true);
+			}
+		});
 		container.start();
 		ContainerTestUtils.waitForAssignment(container, embeddedKafka.getPartitionsPerTopic());
 		Map<String, Object> senderProps = KafkaTestUtils.producerProps(embeddedKafka);
@@ -669,7 +678,7 @@ public class ConcurrentMessageListenerContainerTests {
 			}
 
 			@Override
-			public boolean remainingRecords() {
+			public boolean seeksAfterHandling() {
 				return false;
 			}
 

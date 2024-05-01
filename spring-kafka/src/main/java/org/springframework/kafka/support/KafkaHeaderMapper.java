@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2019 the original author or authors.
+ * Copyright 2017-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,8 +39,9 @@ public interface KafkaHeaderMapper {
 	void fromHeaders(MessageHeaders headers, Headers target);
 
 	/**
-	 * Map from the given target headers to abstracted {@link MessageHeaders}.
-	 * @param source the native target headers.
+	 * Map from the given native headers to a map of headers for the eventual
+	 * {@link MessageHeaders}.
+	 * @param source the native headers.
 	 * @param target the target headers.
 	 */
 	void toHeaders(Headers source, Map<String, Object> target);

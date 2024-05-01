@@ -1,5 +1,5 @@
 /*
- * Copyright 2019 the original author or authors.
+ * Copyright 2019-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,6 +31,7 @@ import org.springframework.util.StringUtils;
  *
  * @author Gary Russell
  * @author Artem Bilan
+ * @author Tomaz Fernandes
  *
  * @since 2.3
  */
@@ -82,6 +83,24 @@ public final class JavaUtils {
 	public JavaUtils acceptIfHasText(String value, Consumer<String> consumer) {
 		if (StringUtils.hasText(value)) {
 			consumer.accept(value);
+		}
+		return this;
+	}
+
+	/**
+	 * Invoke {@link Consumer#accept(Object)} with the cast value if the object is an
+	 * instance of the provided class.
+	 * @param <T> the type of the class to check and cast.
+	 * @param type the type.
+	 * @param value the value to be checked and cast.
+	 * @param consumer the consumer.
+	 * @return this.
+	 * @since 2.9
+	 */
+	@SuppressWarnings("unchecked")
+	public <T> JavaUtils acceptIfInstanceOf(Class<T> type, Object value, Consumer<T> consumer) {
+		if (type.isAssignableFrom(value.getClass())) {
+			consumer.accept((T) value);
 		}
 		return this;
 	}

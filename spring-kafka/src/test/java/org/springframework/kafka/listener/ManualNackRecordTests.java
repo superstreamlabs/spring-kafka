@@ -61,6 +61,7 @@ import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.listener.ContainerProperties.AckMode;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
+import org.springframework.lang.Nullable;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
@@ -141,7 +142,7 @@ public class ManualNackRecordTests {
 			}
 			this.deliveryLatch.countDown();
 			if (++this.count == 4) { // part 1, offset 1, first time
-				ack.nack(50);
+				ack.nack(Duration.ofMillis(50));
 			}
 			else {
 				ack.acknowledge();
@@ -243,6 +244,18 @@ public class ManualNackRecordTests {
 			factory.setConsumerFactory(consumerFactory());
 			factory.getContainerProperties().setAckMode(AckMode.MANUAL);
 			factory.getContainerProperties().setMissingTopicsFatal(false);
+			factory.setRecordInterceptor(new RecordInterceptor() {
+
+				@Override
+				@Nullable
+				@SuppressWarnings("rawtypes")
+				public ConsumerRecord intercept(ConsumerRecord record, Consumer consumer) {
+					return new ConsumerRecord(record.topic(), record.partition(), record.offset(), 0L,
+							TimestampType.NO_TIMESTAMP_TYPE, 0, 0, record.key(), record.value(), record.headers(),
+							Optional.empty());
+				}
+
+			});
 			return factory;
 		}
 

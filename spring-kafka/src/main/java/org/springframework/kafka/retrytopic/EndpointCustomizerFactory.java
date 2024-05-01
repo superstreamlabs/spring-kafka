@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2021 the original author or authors.
+ * Copyright 2018-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.springframework.beans.factory.BeanFactory;
 import org.springframework.kafka.config.MethodKafkaListenerEndpoint;
@@ -42,6 +43,8 @@ import org.springframework.kafka.support.TopicPartitionOffset;
  */
 public class EndpointCustomizerFactory {
 
+	private static final int DEFAULT_PARTITION_FOR_MANUAL_ASSIGNMENT = 0;
+
 	private final DestinationTopic.Properties destinationProperties;
 
 	private final EndpointHandlerMethod beanMethod;
@@ -50,7 +53,7 @@ public class EndpointCustomizerFactory {
 
 	private final RetryTopicNamesProviderFactory retryTopicNamesProviderFactory;
 
-	EndpointCustomizerFactory(DestinationTopic.Properties destinationProperties, EndpointHandlerMethod beanMethod,
+	public EndpointCustomizerFactory(DestinationTopic.Properties destinationProperties, EndpointHandlerMethod beanMethod,
 							BeanFactory beanFactory, RetryTopicNamesProviderFactory retryTopicNamesProviderFactory) {
 
 		this.destinationProperties = destinationProperties;
@@ -71,7 +74,14 @@ public class EndpointCustomizerFactory {
 			Collection<EndpointCustomizer.TopicNamesHolder> topics = customizeAndRegisterTopics(namesProvider, endpoint);
 			endpoint.setId(namesProvider.getEndpointId(endpoint));
 			endpoint.setGroupId(namesProvider.getGroupId(endpoint));
-			endpoint.setTopics(topics.stream().map(EndpointCustomizer.TopicNamesHolder::getCustomizedTopic).toArray(String[]::new));
+			if (endpoint.getTopics().isEmpty() && endpoint.getTopicPartitionsToAssign() != null) {
+				endpoint.setTopicPartitions(getTopicPartitions(properties, namesProvider,
+						endpoint.getTopicPartitionsToAssign()));
+			}
+			else {
+				endpoint.setTopics(endpoint.getTopics().stream()
+						.map(namesProvider::getTopicName).toArray(String[]::new));
+			}
 			endpoint.setClientIdPrefix(namesProvider.getClientIdPrefix(endpoint));
 			endpoint.setGroup(namesProvider.getGroup(endpoint));
 			endpoint.setBean(bean);
@@ -82,6 +92,29 @@ public class EndpointCustomizerFactory {
 			}
 			return topics;
 		};
+	}
+
+	private static TopicPartitionOffset[] getTopicPartitions(DestinationTopic.Properties properties,
+													RetryTopicNamesProviderFactory.RetryTopicNamesProvider namesProvider,
+													TopicPartitionOffset[] topicPartitionOffsets) {
+		return Stream.of(topicPartitionOffsets)
+				.map(tpo -> properties.isMainEndpoint()
+						? getTPOForMainTopic(namesProvider, tpo)
+						: getTPOForRetryTopics(properties, namesProvider, tpo))
+				.toArray(TopicPartitionOffset[]::new);
+	}
+
+	private static TopicPartitionOffset getTPOForRetryTopics(DestinationTopic.Properties properties, RetryTopicNamesProviderFactory.RetryTopicNamesProvider namesProvider, TopicPartitionOffset tpo) {
+		return new TopicPartitionOffset(namesProvider.getTopicName(tpo.getTopic()),
+				tpo.getPartition() <= properties.numPartitions() ? tpo.getPartition() : DEFAULT_PARTITION_FOR_MANUAL_ASSIGNMENT,
+				(Long) null);
+	}
+
+	private static TopicPartitionOffset getTPOForMainTopic(RetryTopicNamesProviderFactory.RetryTopicNamesProvider namesProvider, TopicPartitionOffset tpo) {
+		TopicPartitionOffset newTpo = new TopicPartitionOffset(namesProvider.getTopicName(tpo.getTopic()),
+				tpo.getPartition(), tpo.getOffset(), tpo.getPosition());
+		newTpo.setRelativeToCurrent(tpo.isRelativeToCurrent());
+		return newTpo;
 	}
 
 	protected Collection<EndpointCustomizer.TopicNamesHolder> customizeAndRegisterTopics(

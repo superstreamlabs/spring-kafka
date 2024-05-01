@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2021 the original author or authors.
+ * Copyright 2018-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 package org.springframework.kafka.listener;
 
-import java.time.Clock;
 import java.time.Instant;
 
 import org.springframework.kafka.KafkaException;
@@ -34,14 +33,35 @@ public class TimestampedException extends KafkaException {
 
 	private final long timestamp;
 
-	public TimestampedException(Exception ex, Clock clock) {
-		super(ex.getMessage(), ex);
-		this.timestamp = Instant.now(clock).toEpochMilli();
+	/**
+	 * Constructs an instance with the provided cause
+	 * and the current time.
+	 * @param ex the exception cause.
+	 */
+	public TimestampedException(Exception ex) {
+		this(ex, Instant.now());
 	}
 
-	public TimestampedException(Exception ex) {
-		super(ex.getMessage(), ex);
-		this.timestamp = Instant.now(Clock.systemDefaultZone()).toEpochMilli();
+	/**
+	 * Creates an instance with the timestamp of when it was thrown and its cause.
+	 * @param ex the exception cause.
+	 * @param timestamp the millis from epoch of when the exception was thrown.
+	 * @since 2.7.13
+	 */
+	public TimestampedException(Exception ex, long timestamp) {
+		super("Exception thrown at " + Instant.ofEpochMilli(timestamp), ex);
+		this.timestamp = timestamp;
+	}
+
+	/**
+	 * Creates an instance with the Instant of when it was thrown and its cause.
+	 * @param ex the exception cause.
+	 * @param now the Instant of when the exception was thrown.
+	 * @since 2.7.13
+	 */
+	public TimestampedException(Exception ex, Instant now) {
+		super("Exception thrown at " + now, ex);
+		this.timestamp = now.toEpochMilli();
 	}
 
 	public long getTimestamp() {

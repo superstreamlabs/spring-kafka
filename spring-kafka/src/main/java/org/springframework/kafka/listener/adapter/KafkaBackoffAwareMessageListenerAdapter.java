@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2021 the original author or authors.
+ * Copyright 2018-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package org.springframework.kafka.listener.adapter;
 
 import java.math.BigInteger;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Optional;
 
 import org.apache.kafka.clients.consumer.Consumer;
@@ -96,7 +97,7 @@ public class KafkaBackoffAwareMessageListenerAdapter<K, V>
 			invokeDelegateOnMessage(consumerRecord, acknowledgment, consumer);
 		}
 		catch (Exception ex) {
-			throw new TimestampedException(ex, this.clock);
+			throw new TimestampedException(ex, Instant.now(this.clock));
 		}
 	}
 

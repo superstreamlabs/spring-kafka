@@ -20,17 +20,14 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectStreamClass;
-import java.util.Map;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.common.Metric;
-import org.apache.kafka.common.MetricName;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 
 import org.springframework.core.log.LogAccessor;
-import org.springframework.kafka.support.KafkaUtils;
 import org.springframework.kafka.support.serializer.DeserializationException;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
@@ -41,6 +38,7 @@ import org.springframework.util.backoff.BackOffExecution;
  * Listener utilities.
  *
  * @author Gary Russell
+ * @author Francois Rosiere
  * @since 2.0
  *
  */
@@ -48,8 +46,6 @@ public final class ListenerUtils {
 
 	private ListenerUtils() {
 	}
-
-	private static final ThreadLocal<Boolean> LOG_METADATA_ONLY = new ThreadLocal<>();
 
 	private static final int DEFAULT_SLEEP_INTERVAL = 100;
 
@@ -149,93 +145,6 @@ public final class ListenerUtils {
 	}
 
 	/**
-	 * Set to true to only log record metadata.
-	 * @param onlyMeta true to only log record metadata.
-	 * @since 2.2.14
-	 * @deprecated in favor of {@link KafkaUtils#format(ConsumerRecord)}.
-	 * @see #recordToString(ConsumerRecord)
-	 */
-	@Deprecated
-	public static void setLogOnlyMetadata(boolean onlyMeta) {
-		LOG_METADATA_ONLY.set(onlyMeta);
-	}
-
-	/**
-	 * Return the {@link ConsumerRecord} as a String; either {@code toString()} or
-	 * {@code topic-partition@offset}.
-	 * @param record the record.
-	 * @return the rendered record.
-	 * @since 2.2.14
-	 * @deprecated in favor of {@link KafkaUtils#format(ConsumerRecord)}.
-	 * @see #setLogOnlyMetadata(boolean)
-	 */
-	@Deprecated
-	public static String recordToString(ConsumerRecord<?, ?> record) {
-		return recordToString(record, Boolean.TRUE.equals(LOG_METADATA_ONLY.get()));
-	}
-
-	/**
-	 * Return the {@link ConsumerRecord} as a String; either {@code toString()} or
-	 * {@code topic-partition@offset}.
-	 * @param record the record.
-	 * @param meta true to log just the metadata.
-	 * @return the rendered record.
-	 * @since 2.5.4
-	 * @deprecated in favor of {@link KafkaUtils#format(ConsumerRecord)}.
-	 */
-	@Deprecated
-	public static String recordToString(ConsumerRecord<?, ?> record, boolean meta) {
-		return KafkaUtils.format(record, !meta);
-	}
-
-	/**
-	 * Sleep according to the {@link BackOff}; when the {@link BackOffExecution} returns
-	 * {@link BackOffExecution#STOP} sleep for the previous backOff.
-	 * @param backOff the {@link BackOff} to create a new {@link BackOffExecution}.
-	 * @param executions a thread local containing the {@link BackOffExecution} for this
-	 * thread.
-	 * @param lastIntervals a thread local containing the previous {@link BackOff}
-	 * interval for this thread.
-	 * @since 2.3.12
-	 * @deprecated since 2.7 in favor of
-	 * {@link #unrecoverableBackOff(BackOff, ThreadLocal, ThreadLocal, MessageListenerContainer)}.
-	 */
-	@Deprecated
-	public static void unrecoverableBackOff(BackOff backOff, ThreadLocal<BackOffExecution> executions,
-			ThreadLocal<Long> lastIntervals) {
-
-		try {
-			unrecoverableBackOff(backOff, executions, lastIntervals, new MessageListenerContainer() { // NOSONAR
-
-				@Override
-				public void stop() {
-				}
-
-				@Override
-				public void start() {
-				}
-
-				@Override
-				public boolean isRunning() {
-					return true;
-				}
-
-				@Override
-				public void setupMessageListener(Object messageListener) {
-				}
-
-				@Override
-				public Map<String, Map<MetricName, ? extends Metric>> metrics() {
-					return null; // NOSONAR
-				}
-			});
-		}
-		catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-		}
-	}
-
-	/**
 	 * Sleep according to the {@link BackOff}; when the {@link BackOffExecution} returns
 	 * {@link BackOffExecution#STOP} sleep for the previous backOff.
 	 * @param backOff the {@link BackOff} to create a new {@link BackOffExecution}.
@@ -287,5 +196,21 @@ public final class ListenerUtils {
 		while (System.currentTimeMillis() < timeout);
 	}
 
+	/**
+	 * Create a new {@link  OffsetAndMetadata} using the given container and offset.
+	 * @param container a container.
+	 * @param offset an offset.
+	 * @return an offset and metadata.
+	 * @since 2.8.6
+	 */
+	public static OffsetAndMetadata createOffsetAndMetadata(MessageListenerContainer container,
+															long offset) {
+		final OffsetAndMetadataProvider metadataProvider = container.getContainerProperties()
+				.getOffsetAndMetadataProvider();
+		if (metadataProvider != null) {
+			return metadataProvider.provide(new DefaultListenerMetadata(container), offset);
+		}
+		return new OffsetAndMetadata(offset);
+	}
 }
 

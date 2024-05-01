@@ -35,6 +35,7 @@ import org.springframework.core.log.LogAccessor;
 import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.KafkaException.Level;
 import org.springframework.kafka.listener.ContainerProperties.AckMode;
+import org.springframework.kafka.support.KafkaUtils;
 import org.springframework.lang.Nullable;
 import org.springframework.util.ObjectUtils;
 import org.springframework.util.backoff.FixedBackOff;
@@ -43,6 +44,7 @@ import org.springframework.util.backoff.FixedBackOff;
  * Seek utilities.
  *
  * @author Gary Russell
+ * @author Francois Rosiere
  * @since 2.2
  *
  */
@@ -92,7 +94,6 @@ public final class SeekUtils {
 	 * @param logger a {@link LogAccessor} for seek errors.
 	 * @return true if the failed record was skipped.
 	 */
-	@SuppressWarnings("deprecation")
 	public static boolean doSeeks(List<ConsumerRecord<?, ?>> records, Consumer<?, ?> consumer, Exception exception,
 			boolean recoverable, RecoveryStrategy recovery, @Nullable MessageListenerContainer container,
 			LogAccessor logger) {
@@ -108,18 +109,18 @@ public final class SeekUtils {
 				}
 				catch (Exception ex) {
 					if (isBackoffException(ex)) {
-						logger.debug(ex, () -> ListenerUtils.recordToString(record)
+						logger.debug(ex, () -> KafkaUtils.format(record)
 								+ " included in seeks due to retry back off");
 					}
 					else {
 						logger.error(ex, () -> "Failed to determine if this record ("
-								+ ListenerUtils.recordToString(record)
+								+ KafkaUtils.format(record)
 								+ ") should be recovererd, including in seeks");
 					}
 					skipped.set(false);
 				}
 				if (skipped.get()) {
-					logger.debug(() -> "Skipping seek of: " + ListenerUtils.recordToString(record));
+					logger.debug(() -> "Skipping seek of: " + KafkaUtils.format(record));
 				}
 			}
 			if (!recoverable || !first.get() || !skipped.get()) {
@@ -211,7 +212,7 @@ public final class SeekUtils {
 				ConsumerRecord<?, ?> record = records.get(0);
 				Map<TopicPartition, OffsetAndMetadata> offsetToCommit = Collections.singletonMap(
 						new TopicPartition(record.topic(), record.partition()),
-						new OffsetAndMetadata(record.offset() + 1));
+						ListenerUtils.createOffsetAndMetadata(container, record.offset() + 1));
 				if (container.getContainerProperties().isSyncCommits()) {
 					consumer.commitSync(offsetToCommit, container.getContainerProperties().getSyncCommitTimeout());
 				}

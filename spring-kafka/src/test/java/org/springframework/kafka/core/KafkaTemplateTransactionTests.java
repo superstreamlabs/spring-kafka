@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2021 the original author or authors.
+ * Copyright 2017-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,6 +39,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -65,7 +66,6 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
-import org.springframework.kafka.support.TransactionSupport;
 import org.springframework.kafka.support.transaction.ResourcelessTransactionManager;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.condition.EmbeddedKafkaCondition;
@@ -80,7 +80,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.util.concurrent.SettableListenableFuture;
 
 /**
  * @author Gary Russell
@@ -125,7 +124,7 @@ public class KafkaTemplateTransactionTests {
 			t.sendDefault("baz", "qux");
 			t.sendOffsetsToTransaction(Collections.singletonMap(
 					new TopicPartition(LOCAL_TX_IN_TOPIC, singleRecord.partition()),
-					new OffsetAndMetadata(singleRecord.offset() + 1L)), "testLocalTx");
+					new OffsetAndMetadata(singleRecord.offset() + 1L)), consumer.groupMetadata());
 			assertThat(KafkaTestUtils.getPropertyValue(
 					KafkaTestUtils.getPropertyValue(template, "producers", ThreadLocal.class).get(),
 						"delegate.transactionManager.transactionalId")).isEqualTo("my.transaction.0");
@@ -317,10 +316,10 @@ public class KafkaTemplateTransactionTests {
 	public void testDeadLetterPublisherWhileTransactionActive() {
 		@SuppressWarnings("unchecked")
 		Producer<Object, Object> producer1 = mock(Producer.class);
-		given(producer1.send(any(), any())).willReturn(new SettableListenableFuture<>());
+		given(producer1.send(any(), any())).willReturn(new CompletableFuture<>());
 		@SuppressWarnings("unchecked")
 		Producer<Object, Object> producer2 = mock(Producer.class);
-		given(producer2.send(any(), any())).willReturn(new SettableListenableFuture<>());
+		given(producer2.send(any(), any())).willReturn(new CompletableFuture<>());
 		producer1.initTransactions();
 
 		@SuppressWarnings("unchecked")
@@ -504,10 +503,10 @@ public class KafkaTemplateTransactionTests {
 	public void testExecuteInTransactionNewInnerTx() {
 		@SuppressWarnings("unchecked")
 		Producer<Object, Object> producer1 = mock(Producer.class);
-		given(producer1.send(any(), any())).willReturn(new SettableListenableFuture<>());
+		given(producer1.send(any(), any())).willReturn(new CompletableFuture<>());
 		@SuppressWarnings("unchecked")
 		Producer<Object, Object> producer2 = mock(Producer.class);
-		given(producer2.send(any(), any())).willReturn(new SettableListenableFuture<>());
+		given(producer2.send(any(), any())).willReturn(new CompletableFuture<>());
 		producer1.initTransactions();
 		AtomicBoolean first = new AtomicBoolean(true);
 
@@ -520,11 +519,6 @@ public class KafkaTemplateTransactionTests {
 						return first.getAndSet(false) ? producer1 : producer2;
 					}
 
-					@Override
-					protected Producer<Object, Object> createTransactionalProducerForPartition(String txIdPrefix) {
-						return createTransactionalProducer();
-					}
-
 				};
 		pf.setTransactionIdPrefix("tx.");
 
@@ -533,26 +527,20 @@ public class KafkaTemplateTransactionTests {
 
 		KafkaTransactionManager<Object, Object> tm = new KafkaTransactionManager<>(pf);
 
-		try {
-			TransactionSupport.setTransactionIdSuffix("testExecuteInTransactionNewInnerTx");
-			new TransactionTemplate(tm)
-					.execute(s ->
-							template.executeInTransaction(t -> {
-								template.sendDefault("foo", "bar");
-								return null;
-							}));
+		new TransactionTemplate(tm)
+				.execute(s ->
+						template.executeInTransaction(t -> {
+							template.sendDefault("foo", "bar");
+							return null;
+						}));
 
-			InOrder inOrder = inOrder(producer1, producer2);
-			inOrder.verify(producer1).beginTransaction();
-			inOrder.verify(producer2).beginTransaction();
-			inOrder.verify(producer2).commitTransaction();
-			inOrder.verify(producer2).close(any());
-			inOrder.verify(producer1).commitTransaction();
-			inOrder.verify(producer1).close(any());
-		}
-		finally {
-			TransactionSupport.clearTransactionIdSuffix();
-		}
+		InOrder inOrder = inOrder(producer1, producer2);
+		inOrder.verify(producer1).beginTransaction();
+		inOrder.verify(producer2).beginTransaction();
+		inOrder.verify(producer2).commitTransaction();
+		inOrder.verify(producer2).close(any());
+		inOrder.verify(producer1).commitTransaction();
+		inOrder.verify(producer1).close(any());
 	}
 
 	@Test
@@ -608,7 +596,7 @@ public class KafkaTemplateTransactionTests {
 		@Bean
 		public Producer producer1() {
 			Producer mock = mock(Producer.class);
-			given(mock.send(any(), any())).willReturn(new SettableListenableFuture<>());
+			given(mock.send(any(), any())).willReturn(new CompletableFuture<>());
 			return mock;
 		}
 
@@ -616,7 +604,7 @@ public class KafkaTemplateTransactionTests {
 		@Bean
 		public Producer producer2() {
 			Producer mock = mock(Producer.class);
-			given(mock.send(any(), any())).willReturn(new SettableListenableFuture<>());
+			given(mock.send(any(), any())).willReturn(new CompletableFuture<>());
 			return mock;
 		}
 

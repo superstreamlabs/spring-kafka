@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2021 the original author or authors.
+ * Copyright 2015-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -36,10 +37,9 @@ import org.springframework.kafka.support.SendResult;
 import org.springframework.kafka.support.TopicPartitionOffset;
 import org.springframework.lang.Nullable;
 import org.springframework.messaging.Message;
-import org.springframework.util.concurrent.ListenableFuture;
 
 /**
- * The basic Kafka operations contract returning {@link ListenableFuture}s.
+ * The basic Kafka operations contract returning {@link CompletableFuture}s.
  *
  * @param <K> the key type.
  * @param <V> the value type.
@@ -68,7 +68,7 @@ public interface KafkaOperations<K, V> {
 	 * @param data The data.
 	 * @return a Future for the {@link SendResult}.
 	 */
-	ListenableFuture<SendResult<K, V>> sendDefault(V data);
+	CompletableFuture<SendResult<K, V>> sendDefault(V data);
 
 	/**
 	 * Send the data to the default topic with the provided key and no partition.
@@ -76,7 +76,7 @@ public interface KafkaOperations<K, V> {
 	 * @param data The data.
 	 * @return a Future for the {@link SendResult}.
 	 */
-	ListenableFuture<SendResult<K, V>> sendDefault(K key, V data);
+	CompletableFuture<SendResult<K, V>> sendDefault(K key, V data);
 
 	/**
 	 * Send the data to the default topic with the provided key and partition.
@@ -85,7 +85,7 @@ public interface KafkaOperations<K, V> {
 	 * @param data the data.
 	 * @return a Future for the {@link SendResult}.
 	 */
-	ListenableFuture<SendResult<K, V>> sendDefault(Integer partition, K key, V data);
+	CompletableFuture<SendResult<K, V>> sendDefault(Integer partition, K key, V data);
 
 	/**
 	 * Send the data to the default topic with the provided key and partition.
@@ -96,7 +96,7 @@ public interface KafkaOperations<K, V> {
 	 * @return a Future for the {@link SendResult}.
 	 * @since 1.3
 	 */
-	ListenableFuture<SendResult<K, V>> sendDefault(Integer partition, Long timestamp, K key, V data);
+	CompletableFuture<SendResult<K, V>> sendDefault(Integer partition, Long timestamp, K key, V data);
 
 	/**
 	 * Send the data to the provided topic with no key or partition.
@@ -104,7 +104,7 @@ public interface KafkaOperations<K, V> {
 	 * @param data The data.
 	 * @return a Future for the {@link SendResult}.
 	 */
-	ListenableFuture<SendResult<K, V>> send(String topic, V data);
+	CompletableFuture<SendResult<K, V>> send(String topic, V data);
 
 	/**
 	 * Send the data to the provided topic with the provided key and no partition.
@@ -113,7 +113,7 @@ public interface KafkaOperations<K, V> {
 	 * @param data The data.
 	 * @return a Future for the {@link SendResult}.
 	 */
-	ListenableFuture<SendResult<K, V>> send(String topic, K key, V data);
+	CompletableFuture<SendResult<K, V>> send(String topic, K key, V data);
 
 	/**
 	 * Send the data to the provided topic with the provided key and partition.
@@ -123,7 +123,7 @@ public interface KafkaOperations<K, V> {
 	 * @param data the data.
 	 * @return a Future for the {@link SendResult}.
 	 */
-	ListenableFuture<SendResult<K, V>> send(String topic, Integer partition, K key, V data);
+	CompletableFuture<SendResult<K, V>> send(String topic, Integer partition, K key, V data);
 
 	/**
 	 * Send the data to the provided topic with the provided key and partition.
@@ -135,7 +135,7 @@ public interface KafkaOperations<K, V> {
 	 * @return a Future for the {@link SendResult}.
 	 * @since 1.3
 	 */
-	ListenableFuture<SendResult<K, V>> send(String topic, Integer partition, Long timestamp, K key, V data);
+	CompletableFuture<SendResult<K, V>> send(String topic, Integer partition, Long timestamp, K key, V data);
 
 	/**
 	 * Send the provided {@link ProducerRecord}.
@@ -143,7 +143,7 @@ public interface KafkaOperations<K, V> {
 	 * @return a Future for the {@link SendResult}.
 	 * @since 1.3
 	 */
-	ListenableFuture<SendResult<K, V>> send(ProducerRecord<K, V> record);
+	CompletableFuture<SendResult<K, V>> send(ProducerRecord<K, V> record);
 
 	/**
 	 * Send a message with routing information in message headers. The message payload
@@ -151,10 +151,10 @@ public interface KafkaOperations<K, V> {
 	 * @param message the message to send.
 	 * @return a Future for the {@link SendResult}.
 	 * @see org.springframework.kafka.support.KafkaHeaders#TOPIC
-	 * @see org.springframework.kafka.support.KafkaHeaders#PARTITION_ID
-	 * @see org.springframework.kafka.support.KafkaHeaders#MESSAGE_KEY
+	 * @see org.springframework.kafka.support.KafkaHeaders#PARTITION
+	 * @see org.springframework.kafka.support.KafkaHeaders#KEY
 	 */
-	ListenableFuture<SendResult<K, V>> send(Message<?> message);
+	CompletableFuture<SendResult<K, V>> send(Message<?> message);
 
 	/**
 	 * See {@link Producer#partitionsFor(String)}.
@@ -197,35 +197,6 @@ public interface KafkaOperations<K, V> {
 	 * Flush the producer.
 	 */
 	void flush();
-
-	/**
-	 * When running in a transaction, send the consumer offset(s) to the transaction. The
-	 * group id is obtained from
-	 * {@link org.springframework.kafka.support.KafkaUtils#getConsumerGroupId()}. It is
-	 * not necessary to call this method if the operations are invoked on a listener
-	 * container thread (and the listener container is configured with a
-	 * {@link org.springframework.kafka.transaction.KafkaAwareTransactionManager}) since
-	 * the container will take care of sending the offsets to the transaction.
-	 * @param offsets The offsets.
-	 * @since 1.3
-	 * @deprecated in the 3.0.0 KafkaProducer.
-	 */
-	@Deprecated
-	void sendOffsetsToTransaction(Map<TopicPartition, OffsetAndMetadata> offsets);
-
-	/**
-	 * When running in a transaction, send the consumer offset(s) to the transaction. It
-	 * is not necessary to call this method if the operations are invoked on a listener
-	 * container thread (and the listener container is configured with a
-	 * {@link org.springframework.kafka.transaction.KafkaAwareTransactionManager}) since
-	 * the container will take care of sending the offsets to the transaction.
-	 * @param offsets The offsets.
-	 * @param consumerGroupId the consumer's group.id.
-	 * @since 1.3
-	 * @deprecated in the 3.0.0 KafkaProducer.
-	 */
-	@Deprecated
-	void sendOffsetsToTransaction(Map<TopicPartition, OffsetAndMetadata> offsets, String consumerGroupId);
 
 	/**
 	 * When running in a transaction, send the consumer offset(s) to the transaction. It

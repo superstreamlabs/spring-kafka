@@ -16,8 +16,12 @@
 
 package org.springframework.kafka.listener;
 
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.springframework.classify.BinaryExceptionClassifier;
 import org.springframework.kafka.support.converter.ConversionException;
@@ -42,18 +46,46 @@ public abstract class ExceptionClassifier extends KafkaExceptionLogLevelAware {
 	 * Construct the instance.
 	 */
 	public ExceptionClassifier() {
-		this.classifier = configureDefaultClassifier();
+		this.classifier = configureDefaultClassifier(true);
 	}
 
-	private static ExtendedBinaryExceptionClassifier configureDefaultClassifier() {
-		Map<Class<? extends Throwable>, Boolean> classified = new HashMap<>();
-		classified.put(DeserializationException.class, false);
-		classified.put(MessageConversionException.class, false);
-		classified.put(ConversionException.class, false);
-		classified.put(MethodArgumentResolutionException.class, false);
-		classified.put(NoSuchMethodException.class, false);
-		classified.put(ClassCastException.class, false);
-		return new ExtendedBinaryExceptionClassifier(classified, true);
+	/**
+	 * Return a list of the framework default fatal exceptions.
+	 * This method produces a new list for each call, so changing the list's
+	 * contents has no effect on the framework itself.
+	 * Thus, it should be used only as a reference.
+	 * @return the default fatal exceptions list.
+	 */
+	public static List<Class<? extends Throwable>> defaultFatalExceptionsList() {
+		return Arrays.asList(DeserializationException.class,
+							MessageConversionException.class,
+							ConversionException.class,
+							MethodArgumentResolutionException.class,
+							NoSuchMethodException.class,
+							ClassCastException.class);
+	}
+
+	private static ExtendedBinaryExceptionClassifier configureDefaultClassifier(boolean defaultClassification) {
+		return new ExtendedBinaryExceptionClassifier(defaultFatalExceptionsList().stream()
+				.collect(Collectors.toMap(ex -> ex, ex -> false)), defaultClassification);
+	}
+
+	/**
+	 * By default, unmatched types classify as true. Call this method to make the default
+	 * false, and optionally retain types implicitly classified as false. This should be
+	 * called before calling any of the classification modification methods. This can be
+	 * useful if you want to classify a super class of one or more of the standard fatal
+	 * exceptions as retryable.
+	 * @param retainStandardFatal true to retain.
+	 * @since 3.0
+	 */
+	public void defaultFalse(boolean retainStandardFatal) {
+		if (retainStandardFatal) {
+			this.classifier = configureDefaultClassifier(false);
+		}
+		else {
+			defaultFalse();
+		}
 	}
 
 	/**
@@ -81,6 +113,7 @@ public abstract class ExceptionClassifier extends KafkaExceptionLogLevelAware {
 	 * <ul>
 	 * <li>{@link DeserializationException}</li>
 	 * <li>{@link MessageConversionException}</li>
+	 * <li>{@link ConversionException}</li>
 	 * <li>{@link MethodArgumentResolutionException}</li>
 	 * <li>{@link NoSuchMethodException}</li>
 	 * <li>{@link ClassCastException}</li>
@@ -117,6 +150,16 @@ public abstract class ExceptionClassifier extends KafkaExceptionLogLevelAware {
 	@SuppressWarnings("varargs")
 	public final void addNotRetryableExceptions(Class<? extends Exception>... exceptionTypes) {
 		add(false, exceptionTypes);
+		notRetryable(Arrays.stream(exceptionTypes));
+	}
+
+	/**
+	 * Subclasses can override this to receive notification of configuration of not
+	 * retryable exceptions.
+	 * @param notRetryable the not retryable exceptions.
+	 * @since 2.9.3
+	 */
+	protected void notRetryable(Stream<Class<? extends Exception>> notRetryable) {
 	}
 
 	/**
@@ -136,7 +179,7 @@ public abstract class ExceptionClassifier extends KafkaExceptionLogLevelAware {
 
 	@SafeVarargs
 	@SuppressWarnings("varargs")
-	private final void add(boolean classified, Class<? extends Exception>... exceptionTypes) {
+	private void add(boolean classified, Class<? extends Exception>... exceptionTypes) {
 		Assert.notNull(exceptionTypes, "'exceptionTypes' cannot be null");
 		Assert.noNullElements(exceptionTypes, "'exceptionTypes' cannot contain nulls");
 		for (Class<? extends Exception> exceptionType : exceptionTypes) {
@@ -144,30 +187,6 @@ public abstract class ExceptionClassifier extends KafkaExceptionLogLevelAware {
 					() -> "exceptionType " + exceptionType + " must be an Exception");
 			this.classifier.getClassified().put(exceptionType, classified);
 		}
-	}
-
-	/**
-	 * Remove an exception type from the configured list. By default, the following
-	 * exceptions will not be retried:
-	 * <ul>
-	 * <li>{@link DeserializationException}</li>
-	 * <li>{@link MessageConversionException}</li>
-	 * <li>{@link ConversionException}</li>
-	 * <li>{@link MethodArgumentResolutionException}</li>
-	 * <li>{@link NoSuchMethodException}</li>
-	 * <li>{@link ClassCastException}</li>
-	 * </ul>
-	 * All others will be retried, unless {@link #defaultFalse()} has been called.
-	 * @param exceptionType the exception type.
-	 * @return true if the removal was successful.
-	 * @deprecated in favor of {@link #removeClassification(Class)}
-	 * @see #addNotRetryableExceptions(Class...)
-	 * @see #setClassifications(Map, boolean)
-	 * @see #defaultFalse()
-	 */
-	@Deprecated
-	public boolean removeNotRetryableException(Class<? extends Exception> exceptionType) {
-		return Boolean.TRUE.equals(removeClassification(exceptionType)) ? true : false;
 	}
 
 	/**

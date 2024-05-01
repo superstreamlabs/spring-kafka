@@ -24,6 +24,7 @@ import java.util.stream.IntStream;
 
 import org.springframework.classify.BinaryExceptionClassifier;
 import org.springframework.kafka.core.KafkaOperations;
+import org.springframework.lang.Nullable;
 import org.springframework.util.StringUtils;
 
 /**
@@ -60,6 +61,7 @@ public class DestinationTopicPropertiesFactory {
 
 	private final long timeout;
 
+	@Nullable
 	private Boolean autoStartDltHandler;
 
 	public DestinationTopicPropertiesFactory(String retryTopicSuffix, String dltSuffix, List<Long> backOffValues,
@@ -89,7 +91,7 @@ public class DestinationTopicPropertiesFactory {
 	 * @return this factory.
 	 * @since 2.8
 	 */
-	public DestinationTopicPropertiesFactory autoStartDltHandler(Boolean autoStart) {
+	public DestinationTopicPropertiesFactory autoStartDltHandler(@Nullable Boolean autoStart) {
 		this.autoStartDltHandler = autoStart;
 		return this;
 	}

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ package org.springframework.kafka.config;
  *
  * @author Juergen Hoeller
  * @author Gary Russell
+ * @author Tomaz Fernandes
  */
 public abstract class KafkaListenerConfigUtils {
 
@@ -35,5 +36,11 @@ public abstract class KafkaListenerConfigUtils {
 	 */
 	public static final String KAFKA_LISTENER_ENDPOINT_REGISTRY_BEAN_NAME =
 			"org.springframework.kafka.config.internalKafkaListenerEndpointRegistry";
+
+	/**
+	 * The bean name of the internally managed Kafka consumer back off manager.
+	 */
+	public static final String KAFKA_CONSUMER_BACK_OFF_MANAGER_BEAN_NAME =
+			"org.springframework.kafka.config.internalKafkaConsumerBackOffManager";
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 the original author or authors.
+ * Copyright 2021-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,12 +16,14 @@
 
 package org.springframework.kafka.listener;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.common.TopicPartition;
 
 import org.springframework.kafka.support.TopicPartitionOffset;
 import org.springframework.util.Assert;
@@ -33,6 +35,7 @@ import org.springframework.util.Assert;
  * @since 2.7.4
  *
  */
+@SuppressWarnings("deprecation")
 class ErrorHandlerAdapter implements CommonErrorHandler {
 
 	@SuppressWarnings({ "rawtypes", "unchecked" })
@@ -62,6 +65,7 @@ class ErrorHandlerAdapter implements CommonErrorHandler {
 		this.batchErrorHandler = batchErrorHandler;
 	}
 
+	@SuppressWarnings("deprecation")
 	@Override
 	public boolean remainingRecords() {
 		return this.errorHandler instanceof RemainingRecordsErrorHandler;
@@ -114,13 +118,14 @@ class ErrorHandlerAdapter implements CommonErrorHandler {
 			MessageListenerContainer container, boolean batchListener) {
 
 		if (this.errorHandler != null) {
-			this.errorHandler.handle(thrownException, Collections.EMPTY_LIST, consumer, container);
+			this.errorHandler.handle(thrownException, Collections.emptyList(), consumer, container);
 		}
 		else {
 			this.batchErrorHandler.handle(thrownException, EMPTY_BATCH, consumer, container, () -> { });
 		}
 	}
 
+	@SuppressWarnings("deprecation")
 	@Override
 	public void handleRecord(Exception thrownException, ConsumerRecord<?, ?> record, Consumer<?, ?> consumer,
 			MessageListenerContainer container) {
@@ -154,6 +159,16 @@ class ErrorHandlerAdapter implements CommonErrorHandler {
 		}
 		else {
 			CommonErrorHandler.super.handleBatch(thrownException, data, consumer, container, invokeListener);
+		}
+	}
+
+	@Override
+	public void onPartitionsAssigned(Consumer<?, ?> consumer, Collection<TopicPartition> partitions,
+			Runnable publishPause) {
+
+		if (this.batchErrorHandler instanceof FallbackBatchErrorHandler) {
+			((FallbackBatchErrorHandler) this.batchErrorHandler).onPartitionsAssigned(consumer, partitions,
+					publishPause);
 		}
 	}
 

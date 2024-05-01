@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2021 the original author or authors.
+ * Copyright 2016-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -128,9 +128,28 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 
 	private boolean splitIterables = true;
 
-	public MessagingMessageListenerAdapter(Object bean, Method method) {
+	private String correlationHeaderName = KafkaHeaders.CORRELATION_ID;
+
+	/**
+	 * Create an instance with the provided bean and method.
+	 * @param bean the bean.
+	 * @param method the method.
+	 */
+	protected MessagingMessageListenerAdapter(Object bean, Method method) {
 		this.bean = bean;
 		this.inferredType = determineInferredType(method); // NOSONAR = intentionally not final
+	}
+
+	/**
+	 * Set a custom header name for the correlation id. Default
+	 * {@link KafkaHeaders#CORRELATION_ID}. This header will be echoed back in any reply
+	 * message.
+	 * @param correlationHeaderName the header name.
+	 * @since 3.0
+	 */
+	public void setCorrelationHeaderName(String correlationHeaderName) {
+		Assert.notNull(correlationHeaderName, "'correlationHeaderName' cannot be null");
+		this.correlationHeaderName = correlationHeaderName;
 	}
 
 	/**
@@ -291,35 +310,35 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 
 	@Override
 	public void registerSeekCallback(ConsumerSeekCallback callback) {
-		if (this.bean instanceof ConsumerSeekAware) {
-			((ConsumerSeekAware) this.bean).registerSeekCallback(callback);
+		if (this.bean instanceof ConsumerSeekAware csa) {
+			csa.registerSeekCallback(callback);
 		}
 	}
 
 	@Override
 	public void onPartitionsAssigned(Map<TopicPartition, Long> assignments, ConsumerSeekCallback callback) {
-		if (this.bean instanceof ConsumerSeekAware) {
-			((ConsumerSeekAware) this.bean).onPartitionsAssigned(assignments, callback);
+		if (this.bean instanceof ConsumerSeekAware csa) {
+			csa.onPartitionsAssigned(assignments, callback);
 		}
 	}
 
 	@Override
 	public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
-		if (this.bean instanceof ConsumerSeekAware) {
-			((ConsumerSeekAware) this.bean).onPartitionsRevoked(partitions);
+		if (this.bean instanceof ConsumerSeekAware csa) {
+			csa.onPartitionsRevoked(partitions);
 		}
 	}
 
 	@Override
 	public void onIdleContainer(Map<TopicPartition, Long> assignments, ConsumerSeekCallback callback) {
-		if (this.bean instanceof ConsumerSeekAware) {
-			((ConsumerSeekAware) this.bean).onIdleContainer(assignments, callback);
+		if (this.bean instanceof ConsumerSeekAware csa) {
+			csa.onIdleContainer(assignments, callback);
 		}
 	}
 
-	protected Message<?> toMessagingMessage(ConsumerRecord<K, V> record, @Nullable Acknowledgment acknowledgment,
+	protected Message<?> toMessagingMessage(ConsumerRecord<K, V> cRecord, @Nullable Acknowledgment acknowledgment,
 			Consumer<?, ?> consumer) {
-		return getMessageConverter().toMessage(record, acknowledgment, consumer, getType());
+		return getMessageConverter().toMessage(cRecord, acknowledgment, consumer, getType());
 	}
 
 	/**
@@ -398,8 +417,8 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 	@Nullable
 	private String evaluateReplyTopic(Object request, Object source, Object result) {
 		String replyTo = null;
-		if (result instanceof InvocationResult) {
-			replyTo = evaluateTopic(request, source, result, ((InvocationResult) result).getSendTo());
+		if (result instanceof InvocationResult invResult) {
+			replyTo = evaluateTopic(request, source, result, invResult.getSendTo());
 		}
 		else if (this.replyTopicExpression != null) {
 			replyTo = evaluateTopic(request, source, result, this.replyTopicExpression);
@@ -473,13 +492,13 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 		}
 	}
 
-	private Message<?> checkHeaders(Object result, String topic, Object source) { // NOSONAR (complexity)
+	private Message<?> checkHeaders(Object result, String topic, @Nullable Object source) { // NOSONAR (complexity)
 		Message<?> reply = (Message<?>) result;
 		MessageHeaders headers = reply.getHeaders();
 		boolean needsTopic = headers.get(KafkaHeaders.TOPIC) == null;
 		boolean sourceIsMessage = source instanceof Message;
-		boolean needsCorrelation = headers.get(KafkaHeaders.CORRELATION_ID) == null && sourceIsMessage;
-		boolean needsPartition = headers.get(KafkaHeaders.PARTITION_ID) == null && sourceIsMessage
+		boolean needsCorrelation = headers.get(this.correlationHeaderName) == null && sourceIsMessage;
+		boolean needsPartition = headers.get(KafkaHeaders.PARTITION) == null && sourceIsMessage
 				&& getReplyPartition((Message<?>) source) != null;
 		if (needsTopic || needsCorrelation || needsPartition) {
 			MessageBuilder<?> builder = MessageBuilder.fromMessage(reply);
@@ -487,8 +506,8 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 				builder.setHeader(KafkaHeaders.TOPIC, topic);
 			}
 			if (needsCorrelation && sourceIsMessage) {
-				builder.setHeader(KafkaHeaders.CORRELATION_ID,
-						((Message<?>) source).getHeaders().get(KafkaHeaders.CORRELATION_ID));
+				builder.setHeader(this.correlationHeaderName,
+						((Message<?>) source).getHeaders().get(this.correlationHeaderName));
 			}
 			if (sourceIsMessage && reply.getHeaders().get(KafkaHeaders.REPLY_PARTITION) == null) {
 				setPartition(builder, (Message<?>) source);
@@ -503,8 +522,8 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 		byte[] correlationId = null;
 		boolean sourceIsMessage = source instanceof Message;
 		if (sourceIsMessage
-				&& ((Message<?>) source).getHeaders().get(KafkaHeaders.CORRELATION_ID) != null) {
-			correlationId = ((Message<?>) source).getHeaders().get(KafkaHeaders.CORRELATION_ID, byte[].class);
+				&& ((Message<?>) source).getHeaders().get(this.correlationHeaderName) != null) {
+			correlationId = ((Message<?>) source).getHeaders().get(this.correlationHeaderName, byte[].class);
 		}
 		if (sourceIsMessage) {
 			sendReplyForMessageSource(result, topic, source, correlationId);
@@ -515,7 +534,7 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 	}
 
 	@SuppressWarnings("unchecked")
-	private void sendReplyForMessageSource(Object result, String topic, Object source, byte[] correlationId) {
+	private void sendReplyForMessageSource(Object result, String topic, Object source, @Nullable byte[] correlationId) {
 		MessageBuilder<Object> builder = MessageBuilder.withPayload(result)
 				.setHeader(KafkaHeaders.TOPIC, topic);
 		if (this.replyHeadersConfigurer != null) {
@@ -523,7 +542,7 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 					.filter(e -> {
 						String key = e.getKey();
 						return !key.equals(MessageHeaders.ID) && !key.equals(MessageHeaders.TIMESTAMP)
-								&& !key.equals(KafkaHeaders.CORRELATION_ID)
+								&& !key.equals(this.correlationHeaderName)
 								&& !key.startsWith(KafkaHeaders.RECEIVED);
 					})
 					.filter(e -> this.replyHeadersConfigurer.shouldCopy(e.getKey(), e.getValue()))
@@ -537,7 +556,7 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 			}
 		}
 		if (correlationId != null) {
-			builder.setHeader(KafkaHeaders.CORRELATION_ID, correlationId);
+			builder.setHeader(this.correlationHeaderName, correlationId);
 		}
 		setPartition(builder, ((Message<?>) source));
 		this.replyTemplate.send(builder.build());
@@ -546,7 +565,7 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 	private void setPartition(MessageBuilder<?> builder, Message<?> source) {
 		byte[] partitionBytes = getReplyPartition(source);
 		if (partitionBytes != null) {
-			builder.setHeader(KafkaHeaders.PARTITION_ID, ByteBuffer.wrap(partitionBytes).getInt());
+			builder.setHeader(KafkaHeaders.PARTITION, ByteBuffer.wrap(partitionBytes).getInt());
 		}
 	}
 
@@ -623,8 +642,8 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 					allowedBatchParameters++;
 				}
 				else {
-					if (parameterType instanceof ParameterizedType
-							&& ((ParameterizedType) parameterType).getRawType().equals(Consumer.class)) {
+					if (parameterType instanceof ParameterizedType paramType
+							&& paramType.getRawType().equals(Consumer.class)) {
 						allowedBatchParameters++;
 					}
 				}
@@ -653,8 +672,7 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 
 	private Type extractGenericParameterTypFromMethodParameter(MethodParameter methodParameter) {
 		Type genericParameterType = methodParameter.getGenericParameterType();
-		if (genericParameterType instanceof ParameterizedType) {
-			ParameterizedType parameterizedType = (ParameterizedType) genericParameterType;
+		if (genericParameterType instanceof ParameterizedType parameterizedType) {
 			if (parameterizedType.getRawType().equals(Message.class)) {
 				genericParameterType = ((ParameterizedType) genericParameterType).getActualTypeArguments()[0];
 			}
@@ -665,8 +683,8 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 				this.isConsumerRecordList = paramType.equals(ConsumerRecord.class)
 						|| (isSimpleListOfConsumerRecord(paramType)
 						|| isListOfConsumerRecordUpperBounded(paramType));
-				boolean messageHasGeneric = paramType instanceof ParameterizedType
-						&& ((ParameterizedType) paramType).getRawType().equals(Message.class);
+				boolean messageHasGeneric = paramType instanceof ParameterizedType pType
+						&& pType.getRawType().equals(Message.class);
 				this.isMessageList = paramType.equals(Message.class) || messageHasGeneric;
 				if (messageHasGeneric) {
 					genericParameterType = ((ParameterizedType) paramType).getActualTypeArguments()[0];
@@ -680,26 +698,23 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 	}
 
 	private boolean isSimpleListOfConsumerRecord(Type paramType) {
-		return paramType instanceof ParameterizedType
-				&& ((ParameterizedType) paramType).getRawType().equals(ConsumerRecord.class);
+		return paramType instanceof ParameterizedType pType && pType.getRawType().equals(ConsumerRecord.class);
 	}
 
 	private boolean isListOfConsumerRecordUpperBounded(Type paramType) {
 		return isWildCardWithUpperBound(paramType)
-			&& ((WildcardType) paramType).getUpperBounds()[0] instanceof ParameterizedType
-			&& ((ParameterizedType) ((WildcardType) paramType).getUpperBounds()[0])
-						.getRawType().equals(ConsumerRecord.class);
+			&& ((WildcardType) paramType).getUpperBounds()[0] instanceof ParameterizedType wildCardZero
+			&& wildCardZero.getRawType().equals(ConsumerRecord.class);
 	}
 
 	private boolean isWildCardWithUpperBound(Type paramType) {
-		return paramType instanceof WildcardType
-			&& ((WildcardType) paramType).getUpperBounds() != null
-			&& ((WildcardType) paramType).getUpperBounds().length > 0;
+		return paramType instanceof WildcardType wcType
+			&& wcType.getUpperBounds() != null
+			&& wcType.getUpperBounds().length > 0;
 	}
 
 	private boolean isMessageWithNoTypeInfo(Type parameterType) {
-		if (parameterType instanceof ParameterizedType) {
-			ParameterizedType parameterizedType = (ParameterizedType) parameterType;
+		if (parameterType instanceof ParameterizedType parameterizedType) {
 			Type rawType = parameterizedType.getRawType();
 			if  (rawType.equals(Message.class)) {
 				return parameterizedType.getActualTypeArguments()[0] instanceof WildcardType;
@@ -709,8 +724,7 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 	}
 
 	private boolean parameterIsType(Type parameterType, Type type) {
-		if (parameterType instanceof ParameterizedType) {
-			ParameterizedType parameterizedType = (ParameterizedType) parameterType;
+		if (parameterType instanceof ParameterizedType parameterizedType) {
 			Type rawType = parameterizedType.getRawType();
 			if (rawType.equals(type)) {
 				return true;
@@ -721,34 +735,12 @@ public abstract class MessagingMessageListenerAdapter<K, V> implements ConsumerS
 
 	/**
 	 * Root object for reply expression evaluation.
+	 * @param request the request.
+	 * @param source the source.
+	 * @param result the result.
 	 * @since 2.0
 	 */
-	public static final class ReplyExpressionRoot {
-
-		private final Object request;
-
-		private final Object source;
-
-		private final Object result;
-
-		public ReplyExpressionRoot(Object request, Object source, Object result) {
-			this.request = request;
-			this.source = source;
-			this.result = result;
-		}
-
-		public Object getRequest() {
-			return this.request;
-		}
-
-		public Object getSource() {
-			return this.source;
-		}
-
-		public Object getResult() {
-			return this.result;
-		}
-
+	public record ReplyExpressionRoot(Object request, Object source, Object result) {
 	}
 
 }

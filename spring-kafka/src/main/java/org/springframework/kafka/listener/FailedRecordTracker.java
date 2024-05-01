@@ -30,6 +30,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 
 import org.springframework.core.log.LogAccessor;
+import org.springframework.kafka.support.KafkaUtils;
 import org.springframework.kafka.support.TopicPartitionOffset;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
@@ -57,13 +58,20 @@ class FailedRecordTracker implements RecoveryStrategy {
 
 	private BiFunction<ConsumerRecord<?, ?>, Exception, BackOff> backOffFunction;
 
+	private final BackOffHandler backOffHandler;
+
 	private boolean resetStateOnRecoveryFailure = true;
 
-	private boolean resetStateOnExceptionChange;
+	private boolean resetStateOnExceptionChange = true;
 
-	@SuppressWarnings("deprecation")
 	FailedRecordTracker(@Nullable BiConsumer<ConsumerRecord<?, ?>, Exception> recoverer, BackOff backOff,
 			LogAccessor logger) {
+
+		this(recoverer, backOff, null, logger);
+	}
+
+	FailedRecordTracker(@Nullable BiConsumer<ConsumerRecord<?, ?>, Exception> recoverer, BackOff backOff,
+			@Nullable BackOffHandler backOffHandler, LogAccessor logger) {
 
 		Assert.notNull(backOff, "'backOff' cannot be null");
 		if (recoverer == null) {
@@ -74,10 +82,10 @@ class FailedRecordTracker implements RecoveryStrategy {
 					failedRecord = map.get(new TopicPartition(rec.topic(), rec.partition()));
 				}
 				logger.error(thr, "Backoff "
-					+ (failedRecord == null
-						? "none"
-						: failedRecord.getBackOffExecution())
-					+ " exhausted for " + ListenerUtils.recordToString(rec));
+						+ (failedRecord == null
+								? "none"
+								: failedRecord.getBackOffExecution())
+						+ " exhausted for " + KafkaUtils.format(rec));
 			};
 		}
 		else {
@@ -90,6 +98,9 @@ class FailedRecordTracker implements RecoveryStrategy {
 		}
 		this.noRetries = backOff.start().nextBackOff() == BackOffExecution.STOP;
 		this.backOff = backOff;
+
+		this.backOffHandler = backOffHandler == null ? new DefaultBackOffHandler() : backOffHandler;
+
 	}
 
 	/**
@@ -118,7 +129,8 @@ class FailedRecordTracker implements RecoveryStrategy {
 	 * to the previous failure for the same record. The
 	 * {@link #setBackOffFunction(BiFunction) backOffFunction}, if provided, will be
 	 * called to get the {@link BackOff} to use for the new exception; otherwise, the
-	 * configured {@link BackOff} will be used.
+	 * configured {@link BackOff} will be used. Default true since 2.9; set to false
+	 * to use the existing retry state, even when exceptions change.
 	 * @param resetStateOnExceptionChange true to reset.
 	 * @since 2.6.3
 	 */
@@ -171,12 +183,7 @@ class FailedRecordTracker implements RecoveryStrategy {
 				rl.failedDelivery(record, exception, failedRecord.getDeliveryAttempts().get()));
 		long nextBackOff = failedRecord.getBackOffExecution().nextBackOff();
 		if (nextBackOff != BackOffExecution.STOP) {
-			if (container == null) {
-				Thread.sleep(nextBackOff);
-			}
-			else {
-				ListenerUtils.stoppableSleep(container, nextBackOff);
-			}
+			this.backOffHandler.onNextBackOff(container, exception, nextBackOff);
 			return false;
 		}
 		else {

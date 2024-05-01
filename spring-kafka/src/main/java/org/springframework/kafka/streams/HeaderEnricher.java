@@ -36,8 +36,10 @@ import org.springframework.expression.Expression;
  *
  * @author Gary Russell
  * @since 2.3
+ * @deprecated in favor of {@link HeaderEnricherProcessor}.
  *
  */
+@Deprecated
 public class HeaderEnricher<K, V> implements Transformer<K, V, KeyValue<K, V>> {
 
 	private final Map<String, Expression> headerExpressions = new HashMap<>();

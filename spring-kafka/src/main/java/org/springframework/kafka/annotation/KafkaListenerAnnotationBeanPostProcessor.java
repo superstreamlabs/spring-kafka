@@ -51,6 +51,7 @@ import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.ObjectFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.config.BeanExpressionContext;
 import org.springframework.beans.factory.config.BeanExpressionResolver;
@@ -58,12 +59,11 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.config.Scope;
-import org.springframework.beans.factory.support.BeanDefinitionRegistry;
-import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.expression.StandardBeanExpressionResolver;
+import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.core.MethodIntrospector;
 import org.springframework.core.OrderComparator;
 import org.springframework.core.Ordered;
@@ -72,6 +72,7 @@ import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.core.convert.TypeDescriptor;
 import org.springframework.core.convert.converter.ConditionalGenericConverter;
 import org.springframework.core.convert.converter.Converter;
+import org.springframework.core.convert.converter.ConverterFactory;
 import org.springframework.core.convert.converter.GenericConverter;
 import org.springframework.core.log.LogAccessor;
 import org.springframework.format.Formatter;
@@ -84,12 +85,16 @@ import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.config.MethodKafkaListenerEndpoint;
 import org.springframework.kafka.config.MultiMethodKafkaListenerEndpoint;
 import org.springframework.kafka.listener.ContainerGroupSequencer;
+import org.springframework.kafka.listener.KafkaConsumerBackoffManager;
 import org.springframework.kafka.listener.KafkaListenerErrorHandler;
 import org.springframework.kafka.listener.adapter.RecordFilterStrategy;
-import org.springframework.kafka.retrytopic.RetryTopicBootstrapper;
+import org.springframework.kafka.retrytopic.DestinationTopicResolver;
+import org.springframework.kafka.retrytopic.RetryTopicBeanNames;
+import org.springframework.kafka.retrytopic.RetryTopicComponentFactory;
 import org.springframework.kafka.retrytopic.RetryTopicConfiguration;
+import org.springframework.kafka.retrytopic.RetryTopicConfigurationSupport;
 import org.springframework.kafka.retrytopic.RetryTopicConfigurer;
-import org.springframework.kafka.retrytopic.RetryTopicInternalBeanNames;
+import org.springframework.kafka.retrytopic.RetryTopicSchedulerWrapper;
 import org.springframework.kafka.support.TopicPartitionOffset;
 import org.springframework.lang.Nullable;
 import org.springframework.messaging.converter.GenericMessageConverter;
@@ -98,6 +103,8 @@ import org.springframework.messaging.handler.annotation.support.DefaultMessageHa
 import org.springframework.messaging.handler.annotation.support.MessageHandlerMethodFactory;
 import org.springframework.messaging.handler.invocation.HandlerMethodArgumentResolver;
 import org.springframework.messaging.handler.invocation.InvocableHandlerMethod;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.util.Assert;
 import org.springframework.util.ReflectionUtils;
 import org.springframework.util.StringUtils;
@@ -188,6 +195,8 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 
 	private AnnotationEnhancer enhancer;
 
+	private RetryTopicConfigurer retryTopicConfigurer;
+
 	@Override
 	public int getOrder() {
 		return LOWEST_PRECEDENCE;
@@ -233,6 +242,15 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 		return this.messageHandlerMethodFactory;
 	}
 
+	/**
+	 * Return the {@link KafkaListenerEndpointRegistrar}.
+	 * @return the registrar.
+	 * @since 2.9.3
+	 */
+	public KafkaListenerEndpointRegistrar getEndpointRegistrar() {
+		return this.registrar;
+	}
+
 	@Override
 	public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
 		this.applicationContext = applicationContext;
@@ -252,8 +270,8 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	 */
 	public void setBeanFactory(BeanFactory beanFactory) {
 		this.beanFactory = beanFactory;
-		if (beanFactory instanceof ConfigurableListableBeanFactory) {
-			this.resolver = ((ConfigurableListableBeanFactory) beanFactory).getBeanExpressionResolver();
+		if (beanFactory instanceof ConfigurableListableBeanFactory clbf) {
+			this.resolver = clbf.getBeanExpressionResolver();
 			this.expressionContext = new BeanExpressionContext((ConfigurableListableBeanFactory) beanFactory,
 					this.listenerScope);
 		}
@@ -279,9 +297,9 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	public void afterSingletonsInstantiated() {
 		this.registrar.setBeanFactory(this.beanFactory);
 
-		if (this.beanFactory instanceof ListableBeanFactory) {
+		if (this.beanFactory instanceof ListableBeanFactory lbf) {
 			Map<String, KafkaListenerConfigurer> instances =
-					((ListableBeanFactory) this.beanFactory).getBeansOfType(KafkaListenerConfigurer.class);
+					lbf.getBeansOfType(KafkaListenerConfigurer.class);
 			for (KafkaListenerConfigurer configurer : instances.values()) {
 				configurer.configureKafkaListeners(this.registrar);
 			}
@@ -326,7 +344,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 				List<AnnotationEnhancer> enhancers = enhancersMap.values()
 						.stream()
 						.sorted(new OrderComparator())
-						.collect(Collectors.toList());
+						.toList();
 				this.enhancer = (attrs, element) -> {
 					Map<String, Object> newAttrs = attrs;
 					for (AnnotationEnhancer enh : enhancers) {
@@ -348,7 +366,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 		if (!this.nonAnnotatedClasses.contains(bean.getClass())) {
 			Class<?> targetClass = AopUtils.getTargetClass(bean);
 			Collection<KafkaListener> classLevelListeners = findListenerAnnotations(targetClass);
-			final boolean hasClassLevelListeners = classLevelListeners.size() > 0;
+			final boolean hasClassLevelListeners = !classLevelListeners.isEmpty();
 			final List<Method> multiMethods = new ArrayList<>();
 			Map<Method, Set<KafkaListener>> annotatedMethods = MethodIntrospector.selectMethods(targetClass,
 					(MethodIntrospector.MetadataLookup<Set<KafkaListener>>) method -> {
@@ -361,7 +379,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 								AnnotationUtils.findAnnotation(method, KafkaHandler.class) != null);
 				multiMethods.addAll(methodsWithHandler);
 			}
-			if (annotatedMethods.isEmpty()) {
+			if (annotatedMethods.isEmpty() && !hasClassLevelListeners) {
 				this.nonAnnotatedClasses.add(bean.getClass());
 				this.logger.trace(() -> "No @KafkaListener annotations found on bean type: " + bean.getClass());
 			}
@@ -416,7 +434,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 		if (anns != null) {
 			listeners.addAll(Arrays.stream(anns.value())
 					.map(anno -> enhance(method, anno))
-					.collect(Collectors.toList()));
+					.toList());
 		}
 		return listeners;
 	}
@@ -452,6 +470,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 					new MultiMethodKafkaListenerEndpoint<>(checkedMethods, defaultMethod, bean);
 			String beanRef = classLevelListener.beanRef();
 			this.listenerScope.addListener(beanRef, bean);
+			endpoint.setId(getEndpointId(classLevelListener));
 			processListener(endpoint, classLevelListener, bean, beanName, resolveTopics(classLevelListener),
 					resolveTopicPartitions(classLevelListener));
 			this.listenerScope.removeListener(beanRef);
@@ -462,6 +481,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 		Method methodToUse = checkProxy(method, bean);
 		MethodKafkaListenerEndpoint<K, V> endpoint = new MethodKafkaListenerEndpoint<>();
 		endpoint.setMethod(methodToUse);
+		endpoint.setId(getEndpointId(kafkaListener));
 
 		String beanRef = kafkaListener.beanRef();
 		this.listenerScope.addListener(beanRef, bean);
@@ -482,7 +502,7 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 			retryableCandidates = Arrays.stream(tps)
 					.map(tp -> tp.getTopic())
 					.distinct()
-					.collect(Collectors.toList())
+					.toList()
 					.toArray(new String[0]);
 		}
 
@@ -510,26 +530,54 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	}
 
 	private RetryTopicConfigurer getRetryTopicConfigurer() {
-		bootstrapRetryTopicIfNecessary();
-		return this.beanFactory.getBean(RetryTopicInternalBeanNames.RETRY_TOPIC_CONFIGURER, RetryTopicConfigurer.class);
+		if (this.retryTopicConfigurer == null) {
+			try {
+				this.retryTopicConfigurer = this.beanFactory
+						.getBean(RetryTopicBeanNames.RETRY_TOPIC_CONFIGURER_BEAN_NAME, RetryTopicConfigurer.class);
+			}
+			catch (NoSuchBeanDefinitionException ex) {
+				this.retryTopicConfigurer = createDefaultConfigurer();
+			}
+		}
+		return this.retryTopicConfigurer;
 	}
 
-	private void bootstrapRetryTopicIfNecessary() {
-		if (!(this.beanFactory instanceof BeanDefinitionRegistry)) {
-			throw new IllegalStateException("BeanFactory must be an instance of "
-					+ BeanDefinitionRegistry.class.getSimpleName()
-					+ " to bootstrap the RetryTopic functionality. Provided beanFactory: "
-					+ this.beanFactory.getClass().getSimpleName());
+	private RetryTopicConfigurer createDefaultConfigurer() {
+		if (this.applicationContext instanceof GenericApplicationContext gac) {
+			gac.registerBean(
+					RetryTopicBeanNames.DEFAULT_RETRY_TOPIC_CONFIG_SUPPORT_BEAN_NAME,
+					RetryTopicConfigurationSupport.class,
+					RetryTopicConfigurationSupport::new);
+			RetryTopicConfigurationSupport rtcs = this.applicationContext.getBean(
+					RetryTopicBeanNames.DEFAULT_RETRY_TOPIC_CONFIG_SUPPORT_BEAN_NAME,
+					RetryTopicConfigurationSupport.class);
+			ObjectProvider<RetryTopicComponentFactory> provider = gac.getBeanProvider(RetryTopicComponentFactory.class);
+			DestinationTopicResolver destResolver = rtcs.destinationTopicResolver(provider);
+			RetryTopicSchedulerWrapper schedW = gac.getBeanProvider(RetryTopicSchedulerWrapper.class).getIfUnique();
+			TaskScheduler sched = gac.getBeanProvider(TaskScheduler.class).getIfUnique();
+			if (schedW == null && sched == null) {
+				RetryTopicSchedulerWrapper newSchedW = new RetryTopicSchedulerWrapper(new ThreadPoolTaskScheduler());
+				gac.registerBean(RetryTopicBeanNames.DEFAULT_SCHEDULER_WRAPPER_BEAN_NAME,
+						RetryTopicSchedulerWrapper.class, () -> newSchedW);
+				schedW = gac.getBean(RetryTopicSchedulerWrapper.class);
+			}
+			KafkaConsumerBackoffManager bom =
+					rtcs.kafkaConsumerBackoffManager(this.applicationContext, this.registrar.getEndpointRegistry(), // NOSONAR
+							provider, schedW, sched);
+			RetryTopicConfigurer rtc = rtcs.retryTopicConfigurer(bom, destResolver, provider, this.beanFactory);
+
+			gac.registerBean(RetryTopicBeanNames.DESTINATION_TOPIC_RESOLVER_BEAN_NAME, DestinationTopicResolver.class,
+					() -> destResolver);
+			gac.registerBean(KafkaListenerConfigUtils.KAFKA_CONSUMER_BACK_OFF_MANAGER_BEAN_NAME,
+					KafkaConsumerBackoffManager.class, () -> bom);
+			gac.registerBean(RetryTopicBeanNames.RETRY_TOPIC_CONFIGURER_BEAN_NAME, RetryTopicConfigurer.class,
+					() -> rtc);
+
+			return this.beanFactory
+				.getBean(RetryTopicBeanNames.RETRY_TOPIC_CONFIGURER_BEAN_NAME, RetryTopicConfigurer.class);
 		}
-		BeanDefinitionRegistry registry = (BeanDefinitionRegistry) this.beanFactory;
-		if (!registry.containsBeanDefinition(RetryTopicInternalBeanNames
-				.RETRY_TOPIC_BOOTSTRAPPER)) {
-			registry.registerBeanDefinition(RetryTopicInternalBeanNames
-							.RETRY_TOPIC_BOOTSTRAPPER,
-					new RootBeanDefinition(RetryTopicBootstrapper.class));
-			this.beanFactory.getBean(RetryTopicInternalBeanNames
-					.RETRY_TOPIC_BOOTSTRAPPER, RetryTopicBootstrapper.class).bootstrapRetryTopic();
-		}
+		throw new IllegalStateException("When there is no RetryTopicConfigurationSupport bean, the application context "
+				+ "must be a GenericApplicationContext");
 	}
 
 	private Method checkProxy(Method methodArg, Object bean) {
@@ -583,7 +631,6 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 
 		endpoint.setBean(bean);
 		endpoint.setMessageHandlerMethodFactory(this.messageHandlerMethodFactory);
-		endpoint.setId(getEndpointId(kafkaListener));
 		endpoint.setGroupId(getEndpointGroupId(kafkaListener, endpoint.getId()));
 		endpoint.setTopicPartitions(tps);
 		endpoint.setTopics(topics);
@@ -593,8 +640,8 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 		String group = kafkaListener.containerGroup();
 		if (StringUtils.hasText(group)) {
 			Object resolvedGroup = resolveExpression(group);
-			if (resolvedGroup instanceof String) {
-				endpoint.setGroup((String) resolvedGroup);
+			if (resolvedGroup instanceof String str) {
+				endpoint.setGroup(str);
 			}
 		}
 		String concurrency = kafkaListener.concurrency();
@@ -618,8 +665,8 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 
 	private void resolveErrorHandler(MethodKafkaListenerEndpoint<?, ?> endpoint, KafkaListener kafkaListener) {
 		Object errorHandler = resolveExpression(kafkaListener.errorHandler());
-		if (errorHandler instanceof KafkaListenerErrorHandler) {
-			endpoint.setErrorHandler((KafkaListenerErrorHandler) errorHandler);
+		if (errorHandler instanceof KafkaListenerErrorHandler kleh) {
+			endpoint.setErrorHandler(kleh);
 		}
 		else {
 			String errorHandlerBeanName = resolveExpressionAsString(kafkaListener.errorHandler(), "errorHandler");
@@ -632,8 +679,8 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 
 	private void resolveContentTypeConverter(MethodKafkaListenerEndpoint<?, ?> endpoint, KafkaListener kafkaListener) {
 		Object converter = resolveExpression(kafkaListener.contentTypeConverter());
-		if (converter instanceof SmartMessageConverter) {
-			endpoint.setMessagingConverter((SmartMessageConverter) converter);
+		if (converter instanceof SmartMessageConverter smc) {
+			endpoint.setMessagingConverter(smc);
 		}
 		else {
 			String converterBeanName = resolveExpressionAsString(kafkaListener.contentTypeConverter(),
@@ -648,8 +695,8 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	@SuppressWarnings({ "rawtypes", UNCHECKED })
 	private void resolveFilter(MethodKafkaListenerEndpoint<?, ?> endpoint, KafkaListener kafkaListener) {
 		Object filter = resolveExpression(kafkaListener.filter());
-		if (filter instanceof RecordFilterStrategy) {
-			endpoint.setRecordFilterStrategy((RecordFilterStrategy) filter);
+		if (filter instanceof RecordFilterStrategy rfs) {
+			endpoint.setRecordFilterStrategy(rfs);
 		}
 		else {
 			String filterBeanName = resolveExpressionAsString(kafkaListener.filter(), "filter");
@@ -712,14 +759,14 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 				if (value instanceof String) {
 					loadProperty(properties, property, value);
 				}
-				else if (value instanceof String[]) {
-					for (String prop : (String[]) value) {
+				else if (value instanceof String[] strArr) {
+					for (String prop : strArr) {
 						loadProperty(properties, prop, prop);
 					}
 				}
 				else if (value instanceof Collection) {
 					Collection<?> values = (Collection<?>) value;
-					if (values.size() > 0 && values.iterator().next() instanceof String) {
+					if (!values.isEmpty() && values.iterator().next() instanceof String) {
 						for (String prop : (Collection<String>) value) {
 							loadProperty(properties, prop, prop);
 						}
@@ -791,11 +838,11 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 		String text = kafkaListener.topicPattern();
 		if (StringUtils.hasText(text)) {
 			Object resolved = resolveExpression(text);
-			if (resolved instanceof Pattern) {
-				pattern = (Pattern) resolved;
+			if (resolved instanceof Pattern pat) {
+				pattern = pat;
 			}
-			else if (resolved instanceof String) {
-				pattern = Pattern.compile((String) resolved);
+			else if (resolved instanceof String str) {
+				pattern = Pattern.compile(str);
 			}
 			else if (resolved != null) {
 				throw new IllegalStateException(
@@ -832,20 +879,20 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 						resolveInitialOffset(topic, partitionOffset), isRelative(topic, partitionOffset), true);
 			}
 		}
-		Assert.isTrue(result.size() > 0, () -> "At least one partition required for " + topic);
+		Assert.isTrue(!result.isEmpty(), () -> "At least one partition required for " + topic);
 		return result;
 	}
 
 	private Long resolveInitialOffset(Object topic, PartitionOffset partitionOffset) {
 		Object initialOffsetValue = resolveExpression(partitionOffset.initialOffset());
 		Long initialOffset;
-		if (initialOffsetValue instanceof String) {
-			Assert.state(StringUtils.hasText((String) initialOffsetValue),
+		if (initialOffsetValue instanceof String str) {
+			Assert.state(StringUtils.hasText(str),
 					() -> "'initialOffset' in @PartitionOffset for topic '" + topic + "' cannot be empty");
-			initialOffset = Long.valueOf((String) initialOffsetValue);
+			initialOffset = Long.valueOf(str);
 		}
-		else if (initialOffsetValue instanceof Long) {
-			initialOffset = (Long) initialOffsetValue;
+		else if (initialOffsetValue instanceof Long lng) {
+			initialOffset = lng;
 		}
 		else {
 			throw new IllegalArgumentException(String.format(
@@ -858,11 +905,11 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	private boolean isRelative(Object topic, PartitionOffset partitionOffset) {
 		Object relativeToCurrentValue = resolveExpression(partitionOffset.relativeToCurrent());
 		Boolean relativeToCurrent;
-		if (relativeToCurrentValue instanceof String) {
-			relativeToCurrent = Boolean.valueOf((String) relativeToCurrentValue);
+		if (relativeToCurrentValue instanceof String str) {
+			relativeToCurrent = Boolean.valueOf(str);
 		}
-		else if (relativeToCurrentValue instanceof Boolean) {
-			relativeToCurrent = (Boolean) relativeToCurrentValue;
+		else if (relativeToCurrentValue instanceof Boolean bool) {
+			relativeToCurrent = bool;
 		}
 		else {
 			throw new IllegalArgumentException(String.format(
@@ -874,13 +921,13 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 
 	@SuppressWarnings(UNCHECKED)
 	private void resolveAsString(Object resolvedValue, List<String> result) {
-		if (resolvedValue instanceof String[]) {
-			for (Object object : (String[]) resolvedValue) {
+		if (resolvedValue instanceof String[] strArr) {
+			for (Object object : strArr) {
 				resolveAsString(object, result);
 			}
 		}
-		else if (resolvedValue instanceof String) {
-			result.add((String) resolvedValue);
+		else if (resolvedValue instanceof String str) {
+			result.add(str);
 		}
 		else if (resolvedValue instanceof Iterable) {
 			for (Object object : (Iterable<Object>) resolvedValue) {
@@ -897,17 +944,17 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	private void resolvePartitionAsInteger(String topic, Object resolvedValue,
 			List<TopicPartitionOffset> result, @Nullable Long offset, boolean isRelative, boolean checkDups) {
 
-		if (resolvedValue instanceof String[]) {
-			for (Object object : (String[]) resolvedValue) {
+		if (resolvedValue instanceof String[] strArr) {
+			for (Object object : strArr) {
 				resolvePartitionAsInteger(topic, object, result, offset, isRelative, checkDups);
 			}
 		}
-		else if (resolvedValue instanceof String) {
-			Assert.state(StringUtils.hasText((String) resolvedValue),
+		else if (resolvedValue instanceof String str) {
+			Assert.state(StringUtils.hasText(str),
 					() -> "partition in @TopicPartition for topic '" + topic + "' cannot be empty");
-			List<TopicPartitionOffset> collected = parsePartitions((String) resolvedValue)
+			List<TopicPartitionOffset> collected = parsePartitions(str)
 					.map(part -> new TopicPartitionOffset(topic, part, offset, isRelative))
-					.collect(Collectors.toList());
+					.toList();
 			if (checkDups) {
 				collected.forEach(tpo -> {
 					Assert.state(!result.contains(tpo), () ->
@@ -917,13 +964,13 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 			}
 			result.addAll(collected);
 		}
-		else if (resolvedValue instanceof Integer[]) {
-			for (Integer partition : (Integer[]) resolvedValue) {
+		else if (resolvedValue instanceof Integer[] intArr) {
+			for (Integer partition : intArr) {
 				result.add(new TopicPartitionOffset(topic, partition));
 			}
 		}
-		else if (resolvedValue instanceof Integer) {
-			result.add(new TopicPartitionOffset(topic, (Integer) resolvedValue));
+		else if (resolvedValue instanceof Integer intgr) {
+			result.add(new TopicPartitionOffset(topic, intgr));
 		}
 		else if (resolvedValue instanceof Iterable) {
 			for (Object object : (Iterable<Object>) resolvedValue) {
@@ -938,8 +985,8 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 
 	private String resolveExpressionAsString(String value, String attribute) {
 		Object resolved = resolveExpression(value);
-		if (resolved instanceof String) {
-			return (String) resolved;
+		if (resolved instanceof String str) {
+			return str;
 		}
 		else if (resolved != null) {
 			throw new IllegalStateException(THE_LEFT + attribute + "] must resolve to a String. "
@@ -951,13 +998,13 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	@Nullable
 	private byte[] resolveExpressionAsBytes(String value, String attribute) {
 		Object resolved = resolveExpression(value);
-		if (resolved instanceof String) {
-			if (StringUtils.hasText((CharSequence) resolved)) {
-				return ((String) resolved).getBytes(this.charset);
+		if (resolved instanceof String str) {
+			if (StringUtils.hasText(str)) {
+				return str.getBytes(this.charset);
 			}
 		}
-		else if (resolved instanceof byte[]) {
-			return (byte[]) resolved;
+		else if (resolved instanceof byte[] bytes) {
+			return bytes;
 		}
 		else if (resolved != null) {
 			throw new IllegalStateException(THE_LEFT + attribute + "] must resolve to a String or byte[]. "
@@ -969,11 +1016,11 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	private Integer resolveExpressionAsInteger(String value, String attribute) {
 		Object resolved = resolveExpression(value);
 		Integer result = null;
-		if (resolved instanceof String) {
-			result = Integer.parseInt((String) resolved);
+		if (resolved instanceof String str) {
+			result = Integer.parseInt(str);
 		}
-		else if (resolved instanceof Number) {
-			result = ((Number) resolved).intValue();
+		else if (resolved instanceof Number nbr) {
+			result = nbr.intValue();
 		}
 		else if (resolved != null) {
 			throw new IllegalStateException(
@@ -986,11 +1033,11 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	private Boolean resolveExpressionAsBoolean(String value, String attribute) {
 		Object resolved = resolveExpression(value);
 		Boolean result = null;
-		if (resolved instanceof Boolean) {
-			result = (Boolean) resolved;
+		if (resolved instanceof Boolean bool) {
+			result = bool;
 		}
-		else if (resolved instanceof String) {
-			result = Boolean.parseBoolean((String) resolved);
+		else if (resolved instanceof String str) {
+			result = Boolean.parseBoolean(str);
 		}
 		else if (resolved != null) {
 			throw new IllegalStateException(
@@ -1011,8 +1058,8 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	 * @see ConfigurableBeanFactory#resolveEmbeddedValue
 	 */
 	private String resolve(String value) {
-		if (this.beanFactory != null && this.beanFactory instanceof ConfigurableBeanFactory) {
-			return ((ConfigurableBeanFactory) this.beanFactory).resolveEmbeddedValue(value);
+		if (this.beanFactory instanceof ConfigurableBeanFactory cbf) {
+			return cbf.resolveEmbeddedValue(value);
 		}
 		return value;
 	}
@@ -1020,6 +1067,9 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	private void addFormatters(FormatterRegistry registry) {
 		for (Converter<?, ?> converter : getBeansOfType(Converter.class)) {
 			registry.addConverter(converter);
+		}
+		for (ConverterFactory<?, ?> converter : getBeansOfType(ConverterFactory.class)) {
+			registry.addConverterFactory(converter);
 		}
 		for (GenericConverter converter : getBeansOfType(GenericConverter.class)) {
 			registry.addConverter(converter);
@@ -1030,9 +1080,8 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 	}
 
 	private <T> Collection<T> getBeansOfType(Class<T> type) {
-		if (KafkaListenerAnnotationBeanPostProcessor.this.beanFactory instanceof ListableBeanFactory) {
-			return ((ListableBeanFactory) KafkaListenerAnnotationBeanPostProcessor.this.beanFactory)
-					.getBeansOfType(type)
+		if (KafkaListenerAnnotationBeanPostProcessor.this.beanFactory instanceof ListableBeanFactory lbf) {
+			return lbf.getBeansOfType(type)
 					.values();
 		}
 		else {
@@ -1228,11 +1277,11 @@ public class KafkaListenerAnnotationBeanPostProcessor<K, V>
 				return ByteBuffer.wrap(bytes).getInt();
 			}
 			else if (targetType.getType().equals(short.class) || targetType.getType().equals(Short.class)) {
-				Assert.state(bytes.length >= 2, "At least 2 bytes needed to convert a byte[] to a short");
+				Assert.state(bytes.length >= 2, "At least 2 bytes needed to convert a byte[] to a short"); // NOSONAR
 				return ByteBuffer.wrap(bytes).getShort();
 			}
 			else if (targetType.getType().equals(byte.class) || targetType.getType().equals(Byte.class)) {
-				Assert.state(bytes.length >= 1, "At least 1 byte needed to convert a byte[] to a byte");
+				Assert.state(bytes.length >= 1, "At least 1 byte needed to convert a byte[] to a byte"); // NOSONAR
 				return ByteBuffer.wrap(bytes).get();
 			}
 			return null;

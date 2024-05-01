@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 the original author or authors.
+ * Copyright 2021-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,15 +16,18 @@
 
 package org.springframework.kafka.listener;
 
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.stream.Collectors;
 
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 
+import org.springframework.classify.BinaryExceptionClassifier;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 
@@ -34,6 +37,7 @@ import org.springframework.util.Assert;
  * {@link #deliveryAttemptHeader()} is not supported - always returns false.
  *
  * @author Gary Russell
+ * @author Adrian Chlebosz
  * @since 2.8
  *
  */
@@ -42,6 +46,10 @@ public class CommonDelegatingErrorHandler implements CommonErrorHandler {
 	private final CommonErrorHandler defaultErrorHandler;
 
 	private final Map<Class<? extends Throwable>, CommonErrorHandler> delegates = new LinkedHashMap<>();
+
+	private boolean causeChainTraversing = false;
+
+	private BinaryExceptionClassifier classifier = new BinaryExceptionClassifier(new HashMap<>());
 
 	/**
 	 * Construct an instance with a default error handler that will be invoked if the
@@ -59,21 +67,46 @@ public class CommonDelegatingErrorHandler implements CommonErrorHandler {
 	 * @param delegates the delegates.
 	 */
 	public void setErrorHandlers(Map<Class<? extends Throwable>, CommonErrorHandler> delegates) {
+		Assert.notNull(delegates, "'delegates' cannot be null");
 		this.delegates.clear();
 		this.delegates.putAll(delegates);
 		checkDelegates();
+		updateClassifier(delegates);
 	}
 
+	private void updateClassifier(Map<Class<? extends Throwable>, CommonErrorHandler> delegates) {
+		Map<Class<? extends Throwable>, Boolean> classifications = delegates.keySet().stream()
+			.map(commonErrorHandler -> Map.entry(commonErrorHandler, true))
+			.collect(Collectors.toMap(Entry::getKey, Entry::getValue));
+		this.classifier = new BinaryExceptionClassifier(classifications);
+	}
 
+	/**
+	 * Set the flag enabling deep exception's cause chain traversing. If true, the
+	 * delegate for the first exception classified by {@link BinaryExceptionClassifier}
+	 * will be retrieved.
+	 * @param causeChainTraversing the causeChainTraversing flag.
+	 * @since 2.8.8
+	 */
+	public void setCauseChainTraversing(boolean causeChainTraversing) {
+		this.causeChainTraversing = causeChainTraversing;
+	}
+
+	@SuppressWarnings("deprecation")
 	@Override
 	public boolean remainingRecords() {
 		return this.defaultErrorHandler.remainingRecords();
 	}
 
 	@Override
+	public boolean seeksAfterHandling() {
+		return this.defaultErrorHandler.seeksAfterHandling();
+	}
+
+	@Override
 	public void clearThreadState() {
 		this.defaultErrorHandler.clearThreadState();
-		this.delegates.values().forEach(handler -> handler.clearThreadState());
+		this.delegates.values().forEach(CommonErrorHandler::clearThreadState);
 	}
 
 	@Override
@@ -96,14 +129,18 @@ public class CommonDelegatingErrorHandler implements CommonErrorHandler {
 		checkDelegates();
 	}
 
+	@SuppressWarnings("deprecation")
 	private void checkDelegates() {
 		boolean remainingRecords = this.defaultErrorHandler.remainingRecords();
 		boolean ackAfterHandle = this.defaultErrorHandler.isAckAfterHandle();
+		boolean seeksAfterHandling = this.defaultErrorHandler.seeksAfterHandling();
 		this.delegates.values().forEach(handler -> {
 			Assert.isTrue(remainingRecords == handler.remainingRecords(),
 					"All delegates must return the same value when calling 'remainingRecords()'");
 			Assert.isTrue(ackAfterHandle == handler.isAckAfterHandle(),
 					"All delegates must return the same value when calling 'isAckAfterHandle()'");
+			Assert.isTrue(seeksAfterHandling == handler.seeksAfterHandling(),
+					"All delegates must return the same value when calling 'seeksAfterHandling()'");
 		});
 	}
 
@@ -148,10 +185,7 @@ public class CommonDelegatingErrorHandler implements CommonErrorHandler {
 
 	@Nullable
 	private CommonErrorHandler findDelegate(Throwable thrownException) {
-		Throwable cause = thrownException;
-		if (cause instanceof ListenerExecutionFailedException) {
-			cause = thrownException.getCause();
-		}
+		Throwable cause = findCause(thrownException);
 		if (cause != null) {
 			Class<? extends Throwable> causeClass = cause.getClass();
 			for (Entry<Class<? extends Throwable>, CommonErrorHandler> entry : this.delegates.entrySet()) {
@@ -161,6 +195,35 @@ public class CommonDelegatingErrorHandler implements CommonErrorHandler {
 			}
 		}
 		return null;
+	}
+
+	@Nullable
+	private Throwable findCause(Throwable thrownException) {
+		if (this.causeChainTraversing) {
+			return traverseCauseChain(thrownException);
+		}
+		return shallowTraverseCauseChain(thrownException);
+	}
+
+	@Nullable
+	private Throwable shallowTraverseCauseChain(Throwable thrownException) {
+		Throwable cause = thrownException;
+		if (cause instanceof ListenerExecutionFailedException) {
+			cause = thrownException.getCause();
+		}
+		return cause;
+	}
+
+	@Nullable
+	private Throwable traverseCauseChain(Throwable thrownException) {
+		Throwable cause = thrownException;
+		while (cause != null && cause.getCause() != null) {
+			if (this.classifier.classify(cause)) { // NOSONAR using Boolean here is not dangerous
+				return cause;
+			}
+			cause = cause.getCause();
+		}
+		return cause;
 	}
 
 }

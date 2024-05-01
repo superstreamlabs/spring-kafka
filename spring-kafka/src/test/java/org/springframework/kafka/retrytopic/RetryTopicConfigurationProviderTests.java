@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2021 the original author or authors.
+ * Copyright 2018-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,10 @@ import static org.mockito.BDDMockito.willReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 import java.lang.reflect.Method;
 import java.util.Collections;
 
@@ -34,6 +38,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.core.annotation.AliasFor;
 import org.springframework.kafka.annotation.RetryTopicConfigurationProvider;
 import org.springframework.kafka.annotation.RetryableTopic;
 import org.springframework.kafka.core.KafkaOperations;
@@ -41,6 +46,7 @@ import org.springframework.kafka.core.KafkaOperations;
 /**
  * @author Tomaz Fernandes
  * @author Gary Russell
+ * @author Fabio da Silva Jr.
  * @since 2.7
  */
 @ExtendWith(MockitoExtension.class)
@@ -60,6 +66,8 @@ class RetryTopicConfigurationProviderTests {
 	private final Method annotatedMethod = getAnnotatedMethod("annotatedMethod");
 
 	private final Method nonAnnotatedMethod = getAnnotatedMethod("nonAnnotatedMethod");
+
+	private final Method metaAnnotatedMethod = getAnnotatedMethod("metaAnnotatedMethod");
 
 	private Method getAnnotatedMethod(String methodName) {
 		try {
@@ -89,7 +97,7 @@ class RetryTopicConfigurationProviderTests {
 	void shouldProvideFromAnnotation() {
 
 		// setup
-		willReturn(kafkaOperations).given(beanFactory).getBean(RetryTopicInternalBeanNames.DEFAULT_KAFKA_TEMPLATE_BEAN_NAME, KafkaOperations.class);
+		willReturn(kafkaOperations).given(beanFactory).getBean("retryTopicDefaultKafkaTemplate", KafkaOperations.class);
 
 		// given
 		RetryTopicConfigurationProvider provider = new RetryTopicConfigurationProvider(beanFactory);
@@ -136,6 +144,21 @@ class RetryTopicConfigurationProviderTests {
 
 	}
 
+	@Test
+	void shouldProvideFromMetaAnnotation() {
+
+		// setup
+		willReturn(kafkaOperations).given(beanFactory).getBean("retryTopicDefaultKafkaTemplate", KafkaOperations.class);
+
+		// given
+		RetryTopicConfigurationProvider provider = new RetryTopicConfigurationProvider(beanFactory);
+		RetryTopicConfiguration configuration = provider.findRetryConfigurationFor(topics, metaAnnotatedMethod, bean);
+
+		// then
+		then(this.beanFactory).should(times(0)).getBeansOfType(RetryTopicConfiguration.class);
+		assertThat(configuration.getConcurrency()).isEqualTo(3);
+
+	}
 
 	@Test
 	void shouldNotConfigureIfBeanFactoryNull() {
@@ -155,6 +178,19 @@ class RetryTopicConfigurationProviderTests {
 	}
 
 	public void nonAnnotatedMethod() {
+		// NoOps
+	}
+
+	@Target({ElementType.METHOD})
+	@Retention(RetentionPolicy.RUNTIME)
+	@RetryableTopic
+	static @interface MetaAnnotatedRetryableTopic {
+		@AliasFor(attribute = "concurrency", annotation = RetryableTopic.class)
+		String parallelism() default "3";
+	}
+
+	@MetaAnnotatedRetryableTopic
+	public void metaAnnotatedMethod() {
 		// NoOps
 	}
 }

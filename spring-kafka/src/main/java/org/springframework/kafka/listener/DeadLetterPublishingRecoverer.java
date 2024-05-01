@@ -26,11 +26,13 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import org.apache.commons.logging.LogFactory;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -39,7 +41,6 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 
 import org.springframework.core.log.LogAccessor;
@@ -54,7 +55,6 @@ import org.springframework.kafka.support.serializer.SerializationUtils;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 import org.springframework.util.ObjectUtils;
-import org.springframework.util.concurrent.ListenableFuture;
 
 /**
  * A {@link ConsumerRecordRecoverer} that publishes a failed record to a dead-letter
@@ -66,8 +66,6 @@ import org.springframework.util.concurrent.ListenableFuture;
  *
  */
 public class DeadLetterPublishingRecoverer extends ExceptionClassifier implements ConsumerAwareRecordRecoverer {
-
-	private static final String DEPRECATION = "deprecation";
 
 	private static final BiFunction<ConsumerRecord<?, ?>, Exception, Headers> DEFAULT_HEADERS_FUNCTION =
 			(rec, ex) -> null;
@@ -268,19 +266,6 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 	 * Set to false if you don't want to append the current "original" headers (topic,
 	 * partition etc.) if they are already present. When false, only the first "original"
 	 * headers are retained.
-	 * @param replaceOriginalHeaders set to false not to replace.
-	 * @since 2.7
-	 * @deprecated in favor of {@link #setAppendOriginalHeaders(boolean)}.
-	 */
-	@Deprecated
-	public void setReplaceOriginalHeaders(boolean replaceOriginalHeaders) {
-		this.appendOriginalHeaders = replaceOriginalHeaders;
-	}
-
-	/**
-	 * Set to false if you don't want to append the current "original" headers (topic,
-	 * partition etc.) if they are already present. When false, only the first "original"
-	 * headers are retained.
 	 * @param appendOriginalHeaders set to false not to replace.
 	 * @since 2.7.9
 	 */
@@ -310,7 +295,18 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 	}
 
 	/**
-	 * Set the minumum time to wait for message sending. Default is the producer
+	 * If true, wait for the send result and throw an exception if it fails.
+	 * It will wait for the milliseconds specified in waitForSendResultTimeout for the result.
+	 * @return true to wait.
+	 * @since 2.7.14
+	 * @see #setWaitForSendResultTimeout(Duration)
+	 */
+	protected boolean isFailIfSendResultIsError() {
+		return this.failIfSendResultIsError;
+	}
+
+	/**
+	 * Set the minimum time to wait for message sending. Default is the producer
 	 * configuration {@code delivery.timeout.ms} plus the {@link #setTimeoutBuffer(long)}.
 	 * @param waitForSendResultTimeout the timeout.
 	 * @since 2.7
@@ -322,14 +318,25 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 	}
 
 	/**
-	 * Set the number of milliseconds to add to the producer configuration {@code delivery.timeout.ms}
-	 * property to avoid timing out before the Kafka producer. Default 5000.
+	 * Set the number of milliseconds to add to the producer configuration
+	 * {@code delivery.timeout.ms} property to avoid timing out before the Kafka producer.
+	 * Default 5000.
 	 * @param buffer the buffer.
 	 * @since 2.7
 	 * @see #setWaitForSendResultTimeout(Duration)
 	 */
 	public void setTimeoutBuffer(long buffer) {
 		this.timeoutBuffer = buffer;
+	}
+
+	/**
+	 * The number of milliseconds to add to the producer configuration
+	 * {@code delivery.timeout.ms} property to avoid timing out before the Kafka producer.
+	 * @return the buffer.
+	 * @since 2.7.14
+	 */
+	protected long getTimeoutBuffer() {
+		return this.timeoutBuffer;
 	}
 
 	/**
@@ -364,6 +371,15 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 	public void setExceptionHeadersCreator(ExceptionHeadersCreator headersCreator) {
 		Assert.notNull(headersCreator, "'headersCreator' cannot be null");
 		this.exceptionHeadersCreator = headersCreator;
+	}
+
+	/**
+	 * True if publishing should run in a transaction.
+	 * @return true for transactional.
+	 * @since 2.7.14
+	 */
+	protected boolean isTransactional() {
+		return this.transactional;
 	}
 
 	/**
@@ -427,20 +443,20 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 		}
 	}
 
-	@SuppressWarnings({ "unchecked", DEPRECATION })
+	@SuppressWarnings("unchecked")
 	@Override
 	public void accept(ConsumerRecord<?, ?> record, @Nullable Consumer<?, ?> consumer, Exception exception) {
 		TopicPartition tp = this.destinationResolver.apply(record, exception);
 		if (tp == null) {
 			maybeThrow(record, exception);
-			this.logger.debug(() -> "Recovery of " + ListenerUtils.recordToString(record, true)
+			this.logger.debug(() -> "Recovery of " + KafkaUtils.format(record)
 					+ " skipped because destination resolver returned null");
 			return;
 		}
 		if (this.skipSameTopicFatalExceptions
 				&& tp.topic().equals(record.topic())
 				&& !getClassifier().classify(exception)) {
-			this.logger.error("Recovery of " + ListenerUtils.recordToString(record, true)
+			this.logger.error("Recovery of " + KafkaUtils.format(record)
 					+ " skipped because not retryable exception " + exception.toString()
 					+ " and the destination resolver routed back to the same topic");
 			return;
@@ -494,9 +510,8 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 	}
 
 	private void maybeThrow(ConsumerRecord<?, ?> record, Exception exception) {
-		@SuppressWarnings(DEPRECATION)
 		String message = String.format("No destination returned for record %s and exception %s. " +
-				"failIfNoDestinationReturned: %s", ListenerUtils.recordToString(record), exception,
+				"failIfNoDestinationReturned: %s", KafkaUtils.format(record), exception,
 				this.throwIfNoDestinationReturned);
 		this.logger.warn(message);
 		if (this.throwIfNoDestinationReturned) {
@@ -607,18 +622,20 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 	 * @param inRecord the consumer record.
 	 * @since 2.2.5
 	 */
-	@SuppressWarnings(DEPRECATION)
 	protected void publish(ProducerRecord<Object, Object> outRecord, KafkaOperations<Object, Object> kafkaTemplate,
 			ConsumerRecord<?, ?> inRecord) {
 
-		ListenableFuture<SendResult<Object, Object>> sendResult = null;
+		CompletableFuture<SendResult<Object, Object>> sendResult = null;
 		try {
 			sendResult = kafkaTemplate.send(outRecord);
-			sendResult.addCallback(result -> {
-				this.logger.debug(() -> "Successful dead-letter publication: "
-						+ ListenerUtils.recordToString(inRecord, true) + " to " + result.getRecordMetadata());
-			}, ex -> {
-				this.logger.error(ex, () -> pubFailMessage(outRecord, inRecord));
+			sendResult.whenComplete((result, ex) -> {
+				if (ex == null) {
+					this.logger.debug(() -> "Successful dead-letter publication: "
+							+ KafkaUtils.format(inRecord) + " to " + result.getRecordMetadata());
+				}
+				else {
+					this.logger.error(ex, () -> pubFailMessage(outRecord, inRecord));
+				}
 			});
 		}
 		catch (Exception e) {
@@ -629,9 +646,16 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 		}
 	}
 
-	private void verifySendResult(KafkaOperations<Object, Object> kafkaTemplate,
+	/**
+	 * Wait for the send future to complete.
+	 * @param kafkaTemplate the template used to send the record.
+	 * @param outRecord the record.
+	 * @param sendResult the future.
+	 * @param inRecord the original consumer record.
+	 */
+	protected void verifySendResult(KafkaOperations<Object, Object> kafkaTemplate,
 			ProducerRecord<Object, Object> outRecord,
-			@Nullable ListenableFuture<SendResult<Object, Object>> sendResult, ConsumerRecord<?, ?> inRecord) {
+			@Nullable CompletableFuture<SendResult<Object, Object>> sendResult, ConsumerRecord<?, ?> inRecord) {
 
 		Duration sendTimeout = determineSendTimeout(kafkaTemplate);
 		if (sendResult == null) {
@@ -649,16 +673,28 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 		}
 	}
 
-	@SuppressWarnings(DEPRECATION)
 	private String pubFailMessage(ProducerRecord<Object, Object> outRecord, ConsumerRecord<?, ?> inRecord) {
 		return "Dead-letter publication to "
-				+ outRecord.topic() + "failed for: " + ListenerUtils.recordToString(inRecord, true);
+				+ outRecord.topic() + " failed for: " + KafkaUtils.format(inRecord);
 	}
 
-	private Duration determineSendTimeout(KafkaOperations<?, ?> template) {
+	/**
+	 * Determine the send timeout based on the template's producer factory and
+	 * {@link #setWaitForSendResultTimeout(Duration)}.
+	 * @param template the template.
+	 * @return the timeout.
+	 * @since 2.7.14
+	 */
+	protected Duration determineSendTimeout(KafkaOperations<?, ?> template) {
 		ProducerFactory<? extends Object, ? extends Object> producerFactory = template.getProducerFactory();
 		if (producerFactory != null) { // NOSONAR - will only occur in mock tests
-			Map<String, Object> props = producerFactory.getConfigurationProperties();
+			Map<String, Object> props;
+			try {
+				props = producerFactory.getConfigurationProperties();
+			}
+			catch (UnsupportedOperationException ex) {
+				props = Collections.emptyMap();
+			}
 			if (props != null) { // NOSONAR - will only occur in mock tests
 				return KafkaUtils.determineSendTimeout(props, this.timeoutBuffer,
 						this.waitForSendResultTimeout.toMillis());
@@ -677,63 +713,70 @@ public class DeadLetterPublishingRecoverer extends ExceptionClassifier implement
 
 	private void maybeAddOriginalHeaders(Headers kafkaHeaders, ConsumerRecord<?, ?> record, Exception ex) {
 		maybeAddHeader(kafkaHeaders, this.headerNames.original.topicHeader,
-				record.topic().getBytes(StandardCharsets.UTF_8), HeaderNames.HeadersToAdd.TOPIC);
+				() -> record.topic().getBytes(StandardCharsets.UTF_8), HeaderNames.HeadersToAdd.TOPIC);
 		maybeAddHeader(kafkaHeaders, this.headerNames.original.partitionHeader,
-				ByteBuffer.allocate(Integer.BYTES).putInt(record.partition()).array(),
+				() -> ByteBuffer.allocate(Integer.BYTES).putInt(record.partition()).array(),
 				HeaderNames.HeadersToAdd.PARTITION);
 		maybeAddHeader(kafkaHeaders, this.headerNames.original.offsetHeader,
-				ByteBuffer.allocate(Long.BYTES).putLong(record.offset()).array(), HeaderNames.HeadersToAdd.OFFSET);
+				() -> ByteBuffer.allocate(Long.BYTES).putLong(record.offset()).array(),
+				HeaderNames.HeadersToAdd.OFFSET);
 		maybeAddHeader(kafkaHeaders, this.headerNames.original.timestampHeader,
-				ByteBuffer.allocate(Long.BYTES).putLong(record.timestamp()).array(), HeaderNames.HeadersToAdd.TS);
+				() -> ByteBuffer.allocate(Long.BYTES).putLong(record.timestamp()).array(), HeaderNames.HeadersToAdd.TS);
 		maybeAddHeader(kafkaHeaders, this.headerNames.original.timestampTypeHeader,
-				record.timestampType().toString().getBytes(StandardCharsets.UTF_8), HeaderNames.HeadersToAdd.TS_TYPE);
+				() -> record.timestampType().toString().getBytes(StandardCharsets.UTF_8),
+				HeaderNames.HeadersToAdd.TS_TYPE);
 		if (ex instanceof ListenerExecutionFailedException) {
 			String consumerGroup = ((ListenerExecutionFailedException) ex).getGroupId();
 			if (consumerGroup != null) {
 				maybeAddHeader(kafkaHeaders, this.headerNames.original.consumerGroup,
-						consumerGroup.getBytes(StandardCharsets.UTF_8), HeaderNames.HeadersToAdd.GROUP);
+						() -> consumerGroup.getBytes(StandardCharsets.UTF_8), HeaderNames.HeadersToAdd.GROUP);
 			}
 		}
 	}
 
-	private void maybeAddHeader(Headers kafkaHeaders, String header, byte[] value, HeaderNames.HeadersToAdd hta) {
+	private void maybeAddHeader(Headers kafkaHeaders, String header, Supplier<byte[]> valueSupplier,
+			HeaderNames.HeadersToAdd hta) {
+
 		if (this.whichHeaders.contains(hta)
 				&& (this.appendOriginalHeaders || kafkaHeaders.lastHeader(header) == null)) {
-			kafkaHeaders.add(header, value);
+			kafkaHeaders.add(header, valueSupplier.get());
 		}
 	}
 
 	private void addExceptionInfoHeaders(Headers kafkaHeaders, Exception exception, boolean isKey,
 			HeaderNames names) {
 
-		appendOrReplace(kafkaHeaders, new RecordHeader(isKey ? names.exceptionInfo.keyExceptionFqcn
-				: names.exceptionInfo.exceptionFqcn,
-				exception.getClass().getName().getBytes(StandardCharsets.UTF_8)), HeaderNames.HeadersToAdd.EXCEPTION);
+		appendOrReplace(kafkaHeaders,
+				isKey ? names.exceptionInfo.keyExceptionFqcn : names.exceptionInfo.exceptionFqcn,
+				() -> exception.getClass().getName().getBytes(StandardCharsets.UTF_8),
+				HeaderNames.HeadersToAdd.EXCEPTION);
 		if (exception.getCause() != null) {
-			appendOrReplace(kafkaHeaders, new RecordHeader(names.exceptionInfo.exceptionCauseFqcn,
-					exception.getCause().getClass().getName().getBytes(StandardCharsets.UTF_8)),
+			appendOrReplace(kafkaHeaders,
+					names.exceptionInfo.exceptionCauseFqcn,
+					() -> exception.getCause().getClass().getName().getBytes(StandardCharsets.UTF_8),
 					HeaderNames.HeadersToAdd.EX_CAUSE);
 		}
 		String message = exception.getMessage();
 		if (message != null) {
-			appendOrReplace(kafkaHeaders, new RecordHeader(isKey
-					? names.exceptionInfo.keyExceptionMessage
-					: names.exceptionInfo.exceptionMessage,
-					exception.getMessage().getBytes(StandardCharsets.UTF_8)), HeaderNames.HeadersToAdd.EX_MSG);
+			appendOrReplace(kafkaHeaders,
+					isKey ? names.exceptionInfo.keyExceptionMessage : names.exceptionInfo.exceptionMessage,
+					() -> exception.getMessage().getBytes(StandardCharsets.UTF_8),
+					HeaderNames.HeadersToAdd.EX_MSG);
 		}
-		appendOrReplace(kafkaHeaders, new RecordHeader(isKey
-				? names.exceptionInfo.keyExceptionStacktrace
-				: names.exceptionInfo.exceptionStacktrace,
-				getStackTraceAsString(exception).getBytes(StandardCharsets.UTF_8)),
+		appendOrReplace(kafkaHeaders,
+				isKey ? names.exceptionInfo.keyExceptionStacktrace : names.exceptionInfo.exceptionStacktrace,
+				() -> getStackTraceAsString(exception).getBytes(StandardCharsets.UTF_8),
 				HeaderNames.HeadersToAdd.EX_STACKTRACE);
 	}
 
-	private void appendOrReplace(Headers headers, RecordHeader header, HeaderNames.HeadersToAdd hta) {
+	private void appendOrReplace(Headers headers, String header, Supplier<byte[]> valueSupplier,
+			HeaderNames.HeadersToAdd hta) {
+
 		if (this.whichHeaders.contains(hta)) {
 			if (this.stripPreviousExceptionHeaders) {
-				headers.remove(header.key());
+				headers.remove(header);
 			}
-			headers.add(header);
+			headers.add(header, valueSupplier.get());
 		}
 	}
 

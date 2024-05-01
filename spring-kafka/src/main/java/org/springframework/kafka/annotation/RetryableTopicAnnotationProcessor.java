@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2021 the original author or authors.
+ * Copyright 2018-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,11 +32,11 @@ import org.springframework.context.expression.StandardBeanExpressionResolver;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.expression.spel.support.StandardEvaluationContext;
 import org.springframework.kafka.core.KafkaOperations;
+import org.springframework.kafka.retrytopic.RetryTopicBeanNames;
 import org.springframework.kafka.retrytopic.RetryTopicConfiguration;
 import org.springframework.kafka.retrytopic.RetryTopicConfigurationBuilder;
 import org.springframework.kafka.retrytopic.RetryTopicConfigurer;
 import org.springframework.kafka.retrytopic.RetryTopicConstants;
-import org.springframework.kafka.retrytopic.RetryTopicInternalBeanNames;
 import org.springframework.kafka.support.EndpointHandlerMethod;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.backoff.ExponentialBackOffPolicy;
@@ -75,8 +75,6 @@ public class RetryableTopicAnnotationProcessor {
 	private final BeanExpressionResolver resolver;
 
 	private final BeanExpressionContext expressionContext;
-
-	private static final String DEFAULT_SPRING_BOOT_KAFKA_TEMPLATE_NAME = "kafkaTemplate";
 
 	/**
 	 * Construct an instance using the provided parameters and default resolver,
@@ -131,12 +129,13 @@ public class RetryableTopicAnnotationProcessor {
 		}
 		return RetryTopicConfigurationBuilder.newInstance()
 				.maxAttempts(resolveExpressionAsInteger(annotation.attempts(), "attempts", true))
+				.concurrency(resolveExpressionAsInteger(annotation.concurrency(), "concurrency", false))
 				.customBackoff(createBackoffFromAnnotation(annotation.backoff(), this.beanFactory))
 				.retryTopicSuffix(resolveExpressionAsString(annotation.retryTopicSuffix(), "retryTopicSuffix"))
 				.dltSuffix(resolveExpressionAsString(annotation.dltTopicSuffix(), "dltTopicSuffix"))
 				.dltHandlerMethod(getDltProcessor(method, bean))
 				.includeTopics(Arrays.asList(topics))
-				.listenerFactory(annotation.listenerContainerFactory())
+				.listenerFactory(resolveExpressionAsString(annotation.listenerContainerFactory(), "listenerContainerFactory"))
 				.autoCreateTopics(resolveExpressionAsBoolean(annotation.autoCreateTopics(), "autoCreateTopics"),
 						resolveExpressionAsInteger(annotation.numPartitions(), "numPartitions", true),
 						resolveExpressionAsShort(annotation.replicationFactor(), "replicationFactor", true))
@@ -148,7 +147,7 @@ public class RetryableTopicAnnotationProcessor {
 				.autoStartDltHandler(autoStartDlt)
 				.setTopicSuffixingStrategy(annotation.topicSuffixingStrategy())
 				.timeoutAfter(timeout)
-				.create(getKafkaTemplate(annotation.kafkaTemplate(), topics));
+				.create(getKafkaTemplate(resolveExpressionAsString(annotation.kafkaTemplate(), "kafkaTemplate"), topics));
 	}
 
 	private SleepingBackOffPolicy<?> createBackoffFromAnnotation(Backoff backoff, BeanFactory beanFactory) { // NOSONAR
@@ -200,6 +199,7 @@ public class RetryableTopicAnnotationProcessor {
 				.orElse(RetryTopicConfigurer.DEFAULT_DLT_HANDLER);
 	}
 
+	@SuppressWarnings("deprecation")
 	private KafkaOperations<?, ?> getKafkaTemplate(String kafkaTemplateName, String[] topics) {
 		if (StringUtils.hasText(kafkaTemplateName)) {
 			Assert.state(this.beanFactory != null, "BeanFactory must be set to obtain kafka template by bean name");
@@ -213,18 +213,15 @@ public class RetryableTopicAnnotationProcessor {
 			}
 		}
 		try {
-			return this.beanFactory.getBean(RetryTopicInternalBeanNames.DEFAULT_KAFKA_TEMPLATE_BEAN_NAME,
+			return this.beanFactory.getBean(RetryTopicBeanNames.DEFAULT_KAFKA_TEMPLATE_BEAN_NAME,
 					KafkaOperations.class);
 		}
-		catch (NoSuchBeanDefinitionException ex) {
-			try {
-				return this.beanFactory.getBean(DEFAULT_SPRING_BOOT_KAFKA_TEMPLATE_NAME, KafkaOperations.class);
-			}
-			catch (NoSuchBeanDefinitionException exc) {
-				exc.addSuppressed(ex);
-				throw new BeanInitializationException("Could not find a KafkaTemplate to configure the retry topics.", // NOSONAR (lost stack trace)
-						exc);
-			}
+		catch (NoSuchBeanDefinitionException ex2) {
+			KafkaOperations<?, ?> kafkaOps = this.beanFactory.getBeanProvider(KafkaOperations.class).getIfUnique();
+			Assert.state(kafkaOps != null, () -> "A single KafkaTemplate bean could not be found in the context; "
+					+ " a single instance must exist, or one specifically named "
+					+ RetryTopicBeanNames.DEFAULT_KAFKA_TEMPLATE_BEAN_NAME);
+			return kafkaOps;
 		}
 	}
 

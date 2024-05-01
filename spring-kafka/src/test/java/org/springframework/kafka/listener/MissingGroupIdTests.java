@@ -60,7 +60,7 @@ public class MissingGroupIdTests {
 				new AnnotationConfigApplicationContext(Config1.class);
 		})
 			.withCauseInstanceOf(IllegalStateException.class)
-			.withMessageContaining("No group.id found in consumer config");
+			.withStackTraceContaining("No group.id found in consumer config");
 	}
 
 	@Test
@@ -69,7 +69,7 @@ public class MissingGroupIdTests {
 				new AnnotationConfigApplicationContext(Config2.class);
 		})
 			.withCauseInstanceOf(IllegalStateException.class)
-			.withMessageContaining("No group.id found in consumer config");
+			.withStackTraceContaining("No group.id found in consumer config");
 	}
 
 	@Test

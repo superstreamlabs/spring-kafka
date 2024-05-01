@@ -81,7 +81,7 @@ class KafkaBackoffAwareMessageListenerAdapterTests {
 	@Mock
 	private KafkaConsumerBackoffManager kafkaConsumerBackoffManager;
 
-	private KafkaConsumerBackoffManager.Context context = mock(KafkaConsumerBackoffManager.Context.class);
+	private final KafkaConsumerBackoffManager.Context context = mock(KafkaConsumerBackoffManager.Context.class);
 
 	private final Clock clock = Clock.fixed(Instant.EPOCH, ZoneId.systemDefault());
 
@@ -166,7 +166,7 @@ class KafkaBackoffAwareMessageListenerAdapterTests {
 
 		// when
 		assertThatThrownBy(() -> backoffAwareMessageListenerAdapter.onMessage(data))
-				.isExactlyInstanceOf(TimestampedException.class).getCause().isEqualTo(thrownException);
+				.isExactlyInstanceOf(TimestampedException.class).cause().isEqualTo(thrownException);
 
 		// then
 		then(kafkaConsumerBackoffManager).should(times(1))

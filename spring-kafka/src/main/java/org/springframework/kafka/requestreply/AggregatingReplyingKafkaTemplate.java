@@ -16,6 +16,7 @@
 
 package org.springframework.kafka.requestreply;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -38,7 +39,6 @@ import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.listener.BatchConsumerAwareMessageListener;
 import org.springframework.kafka.listener.ContainerProperties.AckMode;
 import org.springframework.kafka.listener.GenericMessageListenerContainer;
-import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.kafka.support.KafkaUtils;
 import org.springframework.util.Assert;
 
@@ -71,7 +71,7 @@ public class AggregatingReplyingKafkaTemplate<K, V, R>
 
 	private static final int DEFAULT_COMMIT_TIMEOUT = 30;
 
-	private final Map<CorrelationKey, Set<RecordHolder<K, R>>> pending = new HashMap<>();
+	private final Map<Object, Set<RecordHolder<K, R>>> pending = new HashMap<>();
 
 	private final Map<TopicPartition, Long> offsets = new HashMap<>();
 
@@ -124,15 +124,18 @@ public class AggregatingReplyingKafkaTemplate<K, V, R>
 	@Override
 	public void onMessage(List<ConsumerRecord<K, Collection<ConsumerRecord<K, R>>>> data, Consumer<?, ?> consumer) {
 		List<ConsumerRecord<K, Collection<ConsumerRecord<K, R>>>> completed = new ArrayList<>();
+		String correlationHeaderName = getCorrelationHeaderName();
 		data.forEach(record -> {
-			Header correlation = record.headers().lastHeader(KafkaHeaders.CORRELATION_ID);
+			Header correlation = record.headers().lastHeader(correlationHeaderName);
 			if (correlation == null) {
 				this.logger.error(() -> "No correlationId found in reply: " + KafkaUtils.format(record)
 						+ " - to use request/reply semantics, the responding server must return the correlation id "
-						+ " in the '" + KafkaHeaders.CORRELATION_ID + "' header");
+						+ " in the '" + correlationHeaderName + "' header");
 			}
 			else {
-				CorrelationKey correlationId = new CorrelationKey(correlation.value());
+				Object correlationId = isBinaryCorrelation()
+						? new CorrelationKey(correlation.value())
+						: new String(correlation.value(), StandardCharsets.UTF_8);
 				synchronized (this) {
 					if (isPending(correlationId)) {
 						List<ConsumerRecord<K, R>> list = addToCollection(record, correlationId).stream()
@@ -142,8 +145,10 @@ public class AggregatingReplyingKafkaTemplate<K, V, R>
 							ConsumerRecord<K, Collection<ConsumerRecord<K, R>>> done =
 									new ConsumerRecord<>(AGGREGATED_RESULTS_TOPIC, 0, 0L, null, list);
 							done.headers()
-									.add(new RecordHeader(KafkaHeaders.CORRELATION_ID, correlationId
-											.getCorrelationId()));
+									.add(new RecordHeader(correlationHeaderName,
+											isBinaryCorrelation()
+													? ((CorrelationKey) correlationId).getCorrelationId()
+													: ((String) correlationId).getBytes(StandardCharsets.UTF_8)));
 							this.pending.remove(correlationId);
 							checkOffsetsAndCommitIfNecessary(list, consumer);
 							completed.add(done);
@@ -161,7 +166,7 @@ public class AggregatingReplyingKafkaTemplate<K, V, R>
 	}
 
 	@Override
-	protected synchronized boolean handleTimeout(CorrelationKey correlationId,
+	protected synchronized boolean handleTimeout(Object correlationId,
 			RequestReplyFuture<K, V, Collection<ConsumerRecord<K, R>>> future) {
 
 		Set<RecordHolder<K, R>> removed = this.pending.remove(correlationId);
@@ -170,7 +175,7 @@ public class AggregatingReplyingKafkaTemplate<K, V, R>
 					.map(RecordHolder::getRecord)
 					.collect(Collectors.toList());
 			if (this.releaseStrategy.test(list, true)) {
-				future.set(new ConsumerRecord<>(PARTIAL_RESULTS_AFTER_TIMEOUT_TOPIC, 0, 0L, null, list));
+				future.complete(new ConsumerRecord<>(PARTIAL_RESULTS_AFTER_TIMEOUT_TOPIC, 0, 0L, null, list));
 				return true;
 			}
 		}
@@ -191,7 +196,7 @@ public class AggregatingReplyingKafkaTemplate<K, V, R>
 	}
 
 	@SuppressWarnings({ "rawtypes", "unchecked" })
-	private Set<RecordHolder<K, R>> addToCollection(ConsumerRecord record, CorrelationKey correlationId) {
+	private Set<RecordHolder<K, R>> addToCollection(ConsumerRecord record, Object correlationId) {
 		Set<RecordHolder<K, R>> set = this.pending.computeIfAbsent(correlationId, id -> new LinkedHashSet<>());
 		set.add(new RecordHolder<>(record));
 		return set;

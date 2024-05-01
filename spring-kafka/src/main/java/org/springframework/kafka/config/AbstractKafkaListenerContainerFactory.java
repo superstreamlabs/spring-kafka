@@ -19,6 +19,7 @@ package org.springframework.kafka.config;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 
 import org.apache.commons.logging.LogFactory;
@@ -35,12 +36,10 @@ import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.AbstractMessageListenerContainer;
 import org.springframework.kafka.listener.AfterRollbackProcessor;
-import org.springframework.kafka.listener.BatchErrorHandler;
 import org.springframework.kafka.listener.BatchInterceptor;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.ContainerProperties;
-import org.springframework.kafka.listener.ErrorHandler;
-import org.springframework.kafka.listener.GenericErrorHandler;
+import org.springframework.kafka.listener.MessageListenerContainer;
 import org.springframework.kafka.listener.RecordInterceptor;
 import org.springframework.kafka.listener.adapter.BatchToRecordAdapter;
 import org.springframework.kafka.listener.adapter.RecordFilterStrategy;
@@ -49,8 +48,6 @@ import org.springframework.kafka.requestreply.ReplyingKafkaOperations;
 import org.springframework.kafka.support.JavaUtils;
 import org.springframework.kafka.support.TopicPartitionOffset;
 import org.springframework.kafka.support.converter.MessageConverter;
-import org.springframework.retry.RecoveryCallback;
-import org.springframework.retry.support.RetryTemplate;
 import org.springframework.util.Assert;
 
 /**
@@ -74,7 +71,8 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 
 	private final ContainerProperties containerProperties = new ContainerProperties((Pattern) null); // NOSONAR
 
-	private GenericErrorHandler<?> errorHandler;
+	@SuppressWarnings("deprecation")
+	private org.springframework.kafka.listener.GenericErrorHandler<?> errorHandler;
 
 	private CommonErrorHandler commonErrorHandler;
 
@@ -89,12 +87,6 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 	private RecordFilterStrategy<? super K, ? super V> recordFilterStrategy;
 
 	private Boolean ackDiscarded;
-
-	private RetryTemplate retryTemplate;
-
-	private RecoveryCallback<? extends Object> recoveryCallback;
-
-	private Boolean statefulRetry;
 
 	private Boolean batchListener;
 
@@ -117,6 +109,12 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 	private ApplicationContext applicationContext;
 
 	private ContainerCustomizer<K, V, C> containerCustomizer;
+
+	private String correlationHeaderName;
+
+	private Boolean changeConsumerThreadName;
+
+	private Function<MessageListenerContainer, String> threadNameSupplier;
 
 	@Override
 	public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
@@ -178,43 +176,6 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 	}
 
 	/**
-	 * Set a retryTemplate.
-	 * @param retryTemplate the template.
-	 * @deprecated since 2.8 - use a suitably configured error handler instead.
-	 */
-	@Deprecated
-	public void setRetryTemplate(RetryTemplate retryTemplate) {
-		this.retryTemplate = retryTemplate;
-	}
-
-	/**
-	 * Set a callback to be used with the {@link #setRetryTemplate(RetryTemplate)
-	 * retryTemplate}.
-	 * @param recoveryCallback the callback.
-	 * @deprecated since 2.8 - use a suitably configured error handler instead.
-	 */
-	@Deprecated
-	public void setRecoveryCallback(RecoveryCallback<? extends Object> recoveryCallback) {
-		this.recoveryCallback = recoveryCallback;
-	}
-
-	/**
-	 * When using a {@link RetryTemplate} Set to true to enable stateful retry. Use in
-	 * conjunction with a
-	 * {@link org.springframework.kafka.listener.SeekToCurrentErrorHandler} when retry can
-	 * take excessive time; each failure goes back to the broker, to keep the Consumer
-	 * alive.
-	 * @param statefulRetry true to enable stateful retry.
-	 * @since 2.1.3
-	 * @deprecated since 2.8 - use a suitably configured error handler instead.
-	 */
-	@Deprecated
-	public void setStatefulRetry(boolean statefulRetry) {
-		this.statefulRetry = statefulRetry;
-	}
-
-
-	/**
 	 * Return true if this endpoint creates a batch listener.
 	 * @return true for a batch listener.
 	 * @since 1.1
@@ -260,8 +221,8 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 	 * @deprecated in favor of {@link #setCommonErrorHandler(CommonErrorHandler)}
 	 * @see #setCommonErrorHandler(CommonErrorHandler)
 	 */
-	@Deprecated
-	public void setErrorHandler(ErrorHandler errorHandler) {
+	@Deprecated(since = "2.8", forRemoval = true) // in 3.1
+	public void setErrorHandler(org.springframework.kafka.listener.ErrorHandler errorHandler) {
 		this.errorHandler = errorHandler;
 	}
 
@@ -272,14 +233,15 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 	 * @deprecated in favor of {@link #setCommonErrorHandler(CommonErrorHandler)}
 	 * @see #setCommonErrorHandler(CommonErrorHandler)
 	 */
-	@Deprecated
-	public void setBatchErrorHandler(BatchErrorHandler errorHandler) {
+	@Deprecated(since = "2.8", forRemoval = true) // in 3.1
+	public void setBatchErrorHandler(org.springframework.kafka.listener.BatchErrorHandler errorHandler) {
 		this.errorHandler = errorHandler;
 	}
 
 	/**
-	 * Set the {@link CommonErrorHandler} which can handle errors for both record
-	 * and batch listeners. Replaces the use of {@link GenericErrorHandler}s.
+	 * Set the {@link CommonErrorHandler} which can handle errors for both record and
+	 * batch listeners. Replaces the use of
+	 * {@link org.springframework.kafka.listener.GenericErrorHandler}s.
 	 * @param commonErrorHandler the handler.
 	 * @since 2.8
 	 */
@@ -367,16 +329,51 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 		this.containerCustomizer = containerCustomizer;
 	}
 
+	/**
+	 * Set a custom header name for the correlation id. Default
+	 * {@link org.springframework.kafka.support.KafkaHeaders#CORRELATION_ID}. This header
+	 * will be echoed back in any reply message.
+	 * @param correlationHeaderName the header name.
+	 * @since 3.0
+	 */
+	public void setCorrelationHeaderName(String correlationHeaderName) {
+		this.correlationHeaderName = correlationHeaderName;
+	}
+
+	/**
+	 * Set to true to instruct the container to change the consumer thread name during
+	 * initialization.
+	 * @param changeConsumerThreadName true to change.
+	 * @since 3.0.1
+	 * @see #setThreadNameSupplier(Function)
+	 */
+	public void setChangeConsumerThreadName(boolean changeConsumerThreadName) {
+		this.changeConsumerThreadName = changeConsumerThreadName;
+	}
+
+	/**
+	 * Set a function used to change the consumer thread name. The default returns the
+	 * container {@code listenerId}.
+	 * @param threadNameSupplier the function.
+	 * @since 3.0.1
+	 * @see #setChangeConsumerThreadName(boolean)
+	 */
+	public void setThreadNameSupplier(Function<MessageListenerContainer, String> threadNameSupplier) {
+		Assert.notNull(threadNameSupplier, "'threadNameSupplier' cannot be null");
+		this.threadNameSupplier = threadNameSupplier;
+	}
+
+	@SuppressWarnings("deprecation")
 	@Override
 	public void afterPropertiesSet() {
 		if (this.commonErrorHandler == null && this.errorHandler != null) {
 			if (Boolean.TRUE.equals(this.batchListener)) {
-				Assert.state(this.errorHandler instanceof BatchErrorHandler,
+				Assert.state(this.errorHandler instanceof org.springframework.kafka.listener.BatchErrorHandler,
 						() -> "The error handler must be a BatchErrorHandler, not " +
 								this.errorHandler.getClass().getName());
 			}
 			else {
-				Assert.state(this.errorHandler instanceof ErrorHandler,
+				Assert.state(this.errorHandler instanceof org.springframework.kafka.listener.ErrorHandler,
 						() -> "The error handler must be an ErrorHandler, not " +
 								this.errorHandler.getClass().getName());
 			}
@@ -388,7 +385,8 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 	public C createListenerContainer(KafkaListenerEndpoint endpoint) {
 		C instance = createContainerInstance(endpoint);
 		JavaUtils.INSTANCE
-				.acceptIfNotNull(endpoint.getId(), instance::setBeanName);
+				.acceptIfNotNull(endpoint.getId(), instance::setBeanName)
+				.acceptIfNotNull(endpoint.getMainListenerId(), instance::setMainListenerId);
 		if (endpoint instanceof AbstractKafkaListenerEndpoint) {
 			configureEndpoint((AbstractKafkaListenerEndpoint<K, V>) endpoint);
 		}
@@ -399,7 +397,6 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 		return instance;
 	}
 
-	@SuppressWarnings("deprecation")
 	private void configureEndpoint(AbstractKafkaListenerEndpoint<K, V> aklEndpoint) {
 		if (aklEndpoint.getRecordFilterStrategy() == null) {
 			JavaUtils.INSTANCE
@@ -407,12 +404,10 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 		}
 		JavaUtils.INSTANCE
 				.acceptIfNotNull(this.ackDiscarded, aklEndpoint::setAckDiscarded)
-				.acceptIfNotNull(this.retryTemplate, aklEndpoint::setRetryTemplate)
-				.acceptIfNotNull(this.recoveryCallback, aklEndpoint::setRecoveryCallback)
-				.acceptIfNotNull(this.statefulRetry, aklEndpoint::setStatefulRetry)
 				.acceptIfNotNull(this.replyTemplate, aklEndpoint::setReplyTemplate)
 				.acceptIfNotNull(this.replyHeadersConfigurer, aklEndpoint::setReplyHeadersConfigurer)
-				.acceptIfNotNull(this.batchToRecordAdapter, aklEndpoint::setBatchToRecordAdapter);
+				.acceptIfNotNull(this.batchToRecordAdapter, aklEndpoint::setBatchToRecordAdapter)
+				.acceptIfNotNull(this.correlationHeaderName, aklEndpoint::setCorrelationHeaderName);
 		if (aklEndpoint.getBatchListener() == null) {
 			JavaUtils.INSTANCE
 					.acceptIfNotNull(this.batchListener, aklEndpoint::setBatchListener);
@@ -448,7 +443,9 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 						properties::setSubBatchPerPartition)
 				.acceptIfNotNull(this.errorHandler, instance::setGenericErrorHandler)
 				.acceptIfNotNull(this.commonErrorHandler, instance::setCommonErrorHandler)
-				.acceptIfNotNull(this.missingTopicsFatal, instance.getContainerProperties()::setMissingTopicsFatal);
+				.acceptIfNotNull(this.missingTopicsFatal, instance.getContainerProperties()::setMissingTopicsFatal)
+				.acceptIfNotNull(this.changeConsumerThreadName, instance::setChangeConsumerThreadName)
+				.acceptIfNotNull(this.threadNameSupplier, instance::setThreadNameSupplier);
 		Boolean autoStart = endpoint.getAutoStartup();
 		if (autoStart != null) {
 			instance.setAutoStartup(autoStart);

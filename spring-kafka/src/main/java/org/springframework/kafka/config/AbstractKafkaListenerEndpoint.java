@@ -45,11 +45,10 @@ import org.springframework.kafka.listener.adapter.FilteringMessageListenerAdapte
 import org.springframework.kafka.listener.adapter.MessagingMessageListenerAdapter;
 import org.springframework.kafka.listener.adapter.RecordFilterStrategy;
 import org.springframework.kafka.listener.adapter.ReplyHeadersConfigurer;
+import org.springframework.kafka.support.JavaUtils;
 import org.springframework.kafka.support.TopicPartitionOffset;
 import org.springframework.kafka.support.converter.MessageConverter;
 import org.springframework.lang.Nullable;
-import org.springframework.retry.RecoveryCallback;
-import org.springframework.retry.support.RetryTemplate;
 import org.springframework.util.Assert;
 import org.springframework.util.ObjectUtils;
 
@@ -94,12 +93,6 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 
 	private boolean ackDiscarded;
 
-	private RetryTemplate retryTemplate;
-
-	private RecoveryCallback<? extends Object> recoveryCallback;
-
-	private boolean statefulRetry;
-
 	private Boolean batchListener;
 
 	private KafkaTemplate<?, ?> replyTemplate;
@@ -119,6 +112,11 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 	private BatchToRecordAdapter<K, V> batchToRecordAdapter;
 
 	private byte[] listenerInfo;
+
+	private String correlationHeaderName;
+
+	@Nullable
+	private String mainListenerId;
 
 	@Override
 	public void setBeanFactory(BeanFactory beanFactory) throws BeansException {
@@ -150,8 +148,18 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 		return this.beanResolver;
 	}
 
-	public void setId(String id) {
+	public void setId(@Nullable String id) {
 		this.id = id;
+	}
+
+	public void setMainListenerId(@Nullable String id) {
+		this.mainListenerId = id;
+	}
+
+	@Override
+	@Nullable
+	public String getMainListenerId() {
+		return this.mainListenerId;
 	}
 
 	@Nullable
@@ -328,68 +336,6 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 		this.ackDiscarded = ackDiscarded;
 	}
 
-	@Deprecated
-	@Nullable
-	protected RetryTemplate getRetryTemplate() {
-		return this.retryTemplate;
-	}
-
-	/**
-	 * Set a retryTemplate.
-	 * @param retryTemplate the template.
-	 * @deprecated since 2.8 - use a suitably configured error handler instead.
-	 */
-	@Deprecated
-	public void setRetryTemplate(RetryTemplate retryTemplate) {
-		this.retryTemplate = retryTemplate;
-	}
-
-	/**
-	 * Get the recovery callback.
-	 * @return the recovery callback.
-	 * @deprecated since 2.8 - use a suitably configured error handler instead.
-	 */
-	@Deprecated
-	@Nullable
-	protected RecoveryCallback<?> getRecoveryCallback() {
-		return this.recoveryCallback;
-	}
-
-	/**
-	 * Set a callback to be used with the {@link #setRetryTemplate(RetryTemplate)}.
-	 * @param recoveryCallback the callback.
-	 * @deprecated since 2.8 - use a suitably configured error handler instead.
-	 */
-	@Deprecated
-	public void setRecoveryCallback(RecoveryCallback<? extends Object> recoveryCallback) {
-		this.recoveryCallback = recoveryCallback;
-	}
-
-	/**
-	 * Return the stateful retry.
-	 * @return the stateful retry.
-	 * @deprecated since 2.8 - use a suitably configured error handler instead.
-	 */
-	@Deprecated
-	protected boolean isStatefulRetry() {
-		return this.statefulRetry;
-	}
-
-	/**
-	 * When using a {@link RetryTemplate}, set to true to enable stateful retry. Use in
-	 * conjunction with a
-	 * {@link org.springframework.kafka.listener.SeekToCurrentErrorHandler} when retry can
-	 * take excessive time; each failure goes back to the broker, to keep the Consumer
-	 * alive.
-	 * @param statefulRetry true to enable stateful retry.
-	 * @since 2.1.3
-	 * @deprecated since 2.8 - use a suitably configured error handler instead.
-	 */
-	@Deprecated
-	public void setStatefulRetry(boolean statefulRetry) {
-		this.statefulRetry = statefulRetry;
-	}
-
 	@Nullable
 	@Override
 	public String getClientIdPrefix() {
@@ -510,6 +456,16 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 		this.batchToRecordAdapter = batchToRecordAdapter;
 	}
 
+	/**
+	 * Set a custom header name for the correlation id. Default
+	 * {@link org.springframework.kafka.support.KafkaHeaders#CORRELATION_ID}. This header
+	 * will be echoed back in any reply message.
+	 * @param correlationHeaderName the header name.
+	 * @since 3.0
+	 */
+	public void setCorrelationHeaderName(String correlationHeaderName) {
+		this.correlationHeaderName = correlationHeaderName;
+	}
 
 	@Override
 	public void afterPropertiesSet() {
@@ -545,27 +501,19 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 	protected abstract MessagingMessageListenerAdapter<K, V> createMessageListener(MessageListenerContainer container,
 			@Nullable MessageConverter messageConverter);
 
-	@SuppressWarnings({ "unchecked", "deprecation" })
+	@SuppressWarnings("unchecked")
 	private void setupMessageListener(MessageListenerContainer container,
 			@Nullable MessageConverter messageConverter) {
 
 		MessagingMessageListenerAdapter<K, V> adapter = createMessageListener(container, messageConverter);
-		if (this.replyHeadersConfigurer != null) {
-			adapter.setReplyHeadersConfigurer(this.replyHeadersConfigurer);
-		}
+		JavaUtils.INSTANCE
+				.acceptIfNotNull(this.replyHeadersConfigurer, adapter::setReplyHeadersConfigurer)
+				.acceptIfNotNull(this.correlationHeaderName, adapter::setCorrelationHeaderName);
 		adapter.setSplitIterables(this.splitIterables);
 		Object messageListener = adapter;
 		boolean isBatchListener = isBatchListener();
 		Assert.state(messageListener != null,
 				() -> "Endpoint [" + this + "] must provide a non null message listener");
-		Assert.state(this.retryTemplate == null || !isBatchListener,
-				"A 'RetryTemplate' is not supported with a batch listener; consider configuring the container "
-				+ "with a suitably configured 'SeekToCurrentBatchErrorHandler' instead");
-		if (this.retryTemplate != null) {
-			messageListener = new org.springframework.kafka.listener.adapter.RetryingMessageListenerAdapter<>(
-							(MessageListener<K, V>) messageListener,
-					this.retryTemplate, this.recoveryCallback, this.statefulRetry);
-		}
 		if (this.recordFilterStrategy != null) {
 			if (isBatchListener) {
 				if (((MessagingMessageListenerAdapter<K, V>) messageListener).isConsumerRecords()) {

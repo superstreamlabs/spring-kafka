@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2021 the original author or authors.
+ * Copyright 2016-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ import org.springframework.beans.factory.config.BeanExpressionContext;
 import org.springframework.beans.factory.config.BeanExpressionResolver;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.core.MethodParameter;
-import org.springframework.core.annotation.AnnotationUtils;
+import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.expression.Expression;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.kafka.KafkaException;
@@ -40,7 +40,6 @@ import org.springframework.lang.Nullable;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.converter.MessageConverter;
-import org.springframework.messaging.handler.HandlerMethod;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.SendTo;
 import org.springframework.messaging.handler.annotation.support.PayloadMethodArgumentResolver;
@@ -75,6 +74,8 @@ public class DelegatingInvocableHandler {
 
 	private final Map<InvocableHandlerMethod, Boolean> handlerReturnsMessage = new ConcurrentHashMap<>();
 
+	private final Map<InvocableHandlerMethod, Boolean> handlerMetadataAware = new ConcurrentHashMap<>();
+
 	private final Object bean;
 
 	private final BeanExpressionResolver resolver;
@@ -84,41 +85,6 @@ public class DelegatingInvocableHandler {
 	private final ConfigurableListableBeanFactory beanFactory;
 
 	private final PayloadValidator validator;
-
-	/**
-	 * Construct an instance with the supplied handlers for the bean.
-	 * @param handlers the handlers.
-	 * @param bean the bean.
-	 * @param beanExpressionResolver the expression resolver.
-	 * @param beanExpressionContext the expression context.
-	 * @deprecated in favor of
-	 * {@link #DelegatingInvocableHandler(List, InvocableHandlerMethod, Object, BeanExpressionResolver, BeanExpressionContext, BeanFactory, Validator)}
-	 */
-	@Deprecated
-	public DelegatingInvocableHandler(List<InvocableHandlerMethod> handlers, Object bean,
-			BeanExpressionResolver beanExpressionResolver, BeanExpressionContext beanExpressionContext) {
-
-		this(handlers, null, bean, beanExpressionResolver, beanExpressionContext, null, null);
-	}
-
-	/**
-	 * Construct an instance with the supplied handlers for the bean.
-	 * @param handlers the handlers.
-	 * @param defaultHandler the default handler.
-	 * @param bean the bean.
-	 * @param beanExpressionResolver the resolver.
-	 * @param beanExpressionContext the context.
-	 * @since 2.1.3
-	 * @deprecated in favor of
-	 * {@link #DelegatingInvocableHandler(List, InvocableHandlerMethod, Object, BeanExpressionResolver, BeanExpressionContext, BeanFactory, Validator)}
-	 */
-	@Deprecated
-	public DelegatingInvocableHandler(List<InvocableHandlerMethod> handlers,
-			@Nullable InvocableHandlerMethod defaultHandler,
-			Object bean, BeanExpressionResolver beanExpressionResolver, BeanExpressionContext beanExpressionContext) {
-
-		this(handlers, defaultHandler, bean, beanExpressionResolver, beanExpressionContext, null, null);
-	}
 
 	/**
 	 * Construct an instance with the supplied handlers for the bean.
@@ -137,11 +103,12 @@ public class DelegatingInvocableHandler {
 			@Nullable BeanExpressionContext beanExpressionContext,
 			@Nullable BeanFactory beanFactory, @Nullable Validator validator) {
 
-		this.handlers = new ArrayList<>();
+		this.handlers = new ArrayList<>(handlers);
 		for (InvocableHandlerMethod handler : handlers) {
-			this.handlers.add(wrapIfNecessary(handler));
+			checkSpecial(handler);
 		}
-		this.defaultHandler = wrapIfNecessary(defaultHandler);
+		this.defaultHandler = defaultHandler;
+		checkSpecial(defaultHandler);
 		this.bean = bean;
 		this.resolver = beanExpressionResolver;
 		this.beanExpressionContext = beanExpressionContext;
@@ -151,18 +118,17 @@ public class DelegatingInvocableHandler {
 		this.validator = validator == null ? null : new PayloadValidator(validator);
 	}
 
-	@Nullable
-	private InvocableHandlerMethod wrapIfNecessary(@Nullable InvocableHandlerMethod handler) {
+	private void checkSpecial(@Nullable InvocableHandlerMethod handler) {
 		if (handler == null) {
-			return null;
+			return;
 		}
 		Parameter[] parameters = handler.getMethod().getParameters();
 		for (Parameter parameter : parameters) {
 			if (parameter.getType().equals(ConsumerRecordMetadata.class)) {
-				return new DelegatingInvocableHandler.MetadataAwareInvocableHandlerMethod(handler);
+				this.handlerMetadataAware.put(handler, true);
+				return;
 			}
 		}
-		return handler;
 	}
 
 	/**
@@ -191,7 +157,7 @@ public class DelegatingInvocableHandler {
 			}
 		}
 		Object result;
-		if (handler instanceof MetadataAwareInvocableHandlerMethod) {
+		if (Boolean.TRUE.equals(this.handlerMetadataAware.get(handler))) {
 			Object[] args = new Object[providedArgs.length + 1];
 			args[0] = AdapterUtils.buildConsumerRecordMetadataFromArray(providedArgs);
 			System.arraycopy(providedArgs, 0, args, 1, providedArgs.length);
@@ -227,12 +193,12 @@ public class DelegatingInvocableHandler {
 		Method method = handler.getMethod();
 		SendTo ann = null;
 		if (method != null) {
-			ann = AnnotationUtils.getAnnotation(method, SendTo.class);
+			ann = AnnotatedElementUtils.findMergedAnnotation(method, SendTo.class);
 			replyTo = extractSendTo(method.toString(), ann);
 		}
 		if (ann == null) {
 			Class<?> beanType = handler.getBeanType();
-			ann = AnnotationUtils.getAnnotation(beanType, SendTo.class);
+			ann = AnnotatedElementUtils.findMergedAnnotation(beanType, SendTo.class);
 			replyTo = extractSendTo(beanType.getSimpleName(), ann);
 		}
 		if (ann != null && replyTo == null) {
@@ -348,19 +314,6 @@ public class DelegatingInvocableHandler {
 
 	public boolean hasDefaultHandler() {
 		return this.defaultHandler != null;
-	}
-
-	/**
-	 * A handler method that is aware of {@link ConsumerRecordMetadata}.
-	 *
-	 * @since 2.5
-	 */
-	private static final class MetadataAwareInvocableHandlerMethod extends InvocableHandlerMethod {
-
-		MetadataAwareInvocableHandlerMethod(HandlerMethod handlerMethod) {
-			super(handlerMethod);
-		}
-
 	}
 
 	private static final class PayloadValidator extends PayloadMethodArgumentResolver {

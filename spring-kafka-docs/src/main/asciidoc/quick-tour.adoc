@@ -51,14 +51,14 @@ However, the quickest way to get started is to use https://start.spring.io[start
 
 This quick tour works with the following versions:
 
-* Apache Kafka Clients 3.0.x
-* Spring Framework 5.3.x
-* Minimum Java version: 8
+* Apache Kafka Clients 3.3.x
+* Spring Framework 6.0.x
+* Minimum Java version: 17
 
 ==== Getting Started
 
 The simplest way to get started is to use https://start.spring.io[start.spring.io] (or the wizards in Spring Tool Suits and Intellij IDEA) and create a project, selecting 'Spring for Apache Kafka' as a dependency.
-Refer to the https://docs.spring.io/spring-boot/docs/current/reference/html/spring-boot-features.html#boot-features-kafka[Spring Boot documentation] for more information about its opinionated auto configuration of the infrastructure beans.
+Refer to the https://docs.spring.io/spring-boot/docs/current/reference/html/messaging.html#messaging.kafka[Spring Boot documentation] for more information about its opinionated auto configuration of the infrastructure beans.
 
 Here is a minimal consumer application.
 

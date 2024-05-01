@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 the original author or authors.
+ * Copyright 2021-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package org.springframework.kafka.listener;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
@@ -29,12 +30,13 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.kafka.KafkaException;
+import org.springframework.kafka.core.KafkaProducerException;
 
 /**
- * Tests for {@link CommonDelegatingErrorHandler}. Copied from
- * {@link ConditionalDelegatingErrorHandlerTests} with changed handler type.
+ * Tests for {@link CommonDelegatingErrorHandler}.
  *
  * @author Gary Russell
+ * @author Adrian Chlebosz
  * @since 2.8
  *
  */
@@ -86,6 +88,83 @@ public class CommonDelegatingErrorHandlerTests {
 		eh.handleBatch(wrap(new IllegalStateException()), mock(ConsumerRecords.class), mock(Consumer.class),
 				mock(MessageListenerContainer.class), mock(Runnable.class));
 		verify(one).handleBatch(any(), any(), any(), any(), any());
+	}
+
+	@Test
+	void testDelegateForThrowableIsAppliedWhenCauseTraversingIsEnabled() {
+		var defaultHandler = mock(CommonErrorHandler.class);
+
+		var directCauseErrorHandler = mock(CommonErrorHandler.class);
+		var directCauseExc = new IllegalArgumentException();
+		var errorHandler = mock(CommonErrorHandler.class);
+		var exc = new UnsupportedOperationException(directCauseExc);
+
+		var delegatingErrorHandler = new CommonDelegatingErrorHandler(defaultHandler);
+		delegatingErrorHandler.setCauseChainTraversing(true);
+		delegatingErrorHandler.setErrorHandlers(Map.of(
+			exc.getClass(), errorHandler,
+			directCauseExc.getClass(), directCauseErrorHandler
+		));
+
+		delegatingErrorHandler.handleRemaining(directCauseExc, Collections.emptyList(), mock(Consumer.class),
+			mock(MessageListenerContainer.class));
+
+		verify(directCauseErrorHandler).handleRemaining(any(), any(), any(), any());
+		verify(errorHandler, never()).handleRemaining(any(), any(), any(), any());
+	}
+
+	@Test
+	void testDelegateForThrowableCauseIsAppliedWhenCauseTraversingIsEnabled() {
+		var defaultHandler = mock(CommonErrorHandler.class);
+
+		var directCauseErrorHandler = mock(CommonErrorHandler.class);
+		var directCauseExc = new IllegalArgumentException();
+		var exc = new UnsupportedOperationException(directCauseExc);
+
+		var delegatingErrorHandler = new CommonDelegatingErrorHandler(defaultHandler);
+		delegatingErrorHandler.setCauseChainTraversing(true);
+		delegatingErrorHandler.setErrorHandlers(Map.of(
+			directCauseExc.getClass(), directCauseErrorHandler
+		));
+
+		delegatingErrorHandler.handleRemaining(exc, Collections.emptyList(), mock(Consumer.class),
+			mock(MessageListenerContainer.class));
+
+		verify(directCauseErrorHandler).handleRemaining(any(), any(), any(), any());
+	}
+
+	@Test
+	@SuppressWarnings("ConstantConditions")
+	void testDelegateForClassifiableThrowableCauseIsAppliedWhenCauseTraversingIsEnabled() {
+		var defaultHandler = mock(CommonErrorHandler.class);
+
+		var directCauseErrorHandler = mock(CommonErrorHandler.class);
+		var directCauseExc = new KafkaProducerException(null, null, null);
+		var exc = new UnsupportedOperationException(directCauseExc);
+
+		var delegatingErrorHandler = new CommonDelegatingErrorHandler(defaultHandler);
+		delegatingErrorHandler.setCauseChainTraversing(true);
+		delegatingErrorHandler.setErrorHandlers(Map.of(
+			KafkaException.class, directCauseErrorHandler
+		));
+
+		delegatingErrorHandler.handleRemaining(exc, Collections.emptyList(), mock(Consumer.class),
+			mock(MessageListenerContainer.class));
+
+		verify(directCauseErrorHandler).handleRemaining(any(), any(), any(), any());
+	}
+
+	@Test
+	@SuppressWarnings("ConstantConditions")
+	void testDefaultDelegateIsApplied() {
+		var defaultHandler = mock(CommonErrorHandler.class);
+		var delegatingErrorHandler = new CommonDelegatingErrorHandler(defaultHandler);
+		delegatingErrorHandler.setCauseChainTraversing(true);
+
+		delegatingErrorHandler.handleRemaining(null, Collections.emptyList(), mock(Consumer.class),
+			mock(MessageListenerContainer.class));
+
+		verify(defaultHandler).handleRemaining(any(), any(), any(), any());
 	}
 
 	private Exception wrap(Exception ex) {

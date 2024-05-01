@@ -9,7 +9,7 @@ If you wish to use a different version of `kafka-clients` or `kafka-streams`, an
 .Maven
 ----
 <properties>
-    <kafka.version>3.1.0</kafka.version>
+    <kafka.version>3.3.1</kafka.version>
 </properties>
 
 <dependency>
@@ -27,28 +27,12 @@ If you wish to use a different version of `kafka-clients` or `kafka-streams`, an
     <artifactId>spring-kafka-test</artifactId>
     <scope>test</scope>
 </dependency>
-
-<dependency>
-    <groupId>org.apache.kafka</groupId>
-    <artifactId>kafka-clients</artifactId>
-    <classifier>test</classifier>
-    <scope>test</scope>
-    <version>${kafka.version}</version>
-</dependency>
-
-<dependency>
-    <groupId>org.apache.kafka</groupId>
-    <artifactId>kafka_2.13</artifactId>
-    <classifier>test</classifier>
-    <scope>test</scope>
-    <version>${kafka.version}</version>
-</dependency>
 ----
 
 [source, groovy, subs="+attributes", role="secondary"]
 .Gradle
 ----
-ext['kafka.version'] = '2.8.1'
+ext['kafka.version'] = '3.2.3'
 
 dependencies {
     implementation 'org.springframework.kafka:spring-kafka'
@@ -64,6 +48,26 @@ dependencies {
 ====
 
 The test scope dependencies are only needed if you are using the embedded Kafka broker in tests.
+
+[appendix]
+[[observation-gen]]
+== Micrometer Observation Documentation
+
+include::../docs/generated/metrics.adoc[]
+
+include::../docs/generated/spans.adoc[]
+
+include::../docs/generated/conventions.adoc[]
+
+[appendix]
+[[native-images]]
+== Native Images
+
+https://docs.spring.io/spring-framework/docs/current/reference/html/core.html#aot[Spring AOT] native hints are provided to assist in developing native images for Spring applications that use Spring for Apache Kafka, including hints for AVRO generated classes used in `@KafkaListener` s.
+
+IMPORTANT: `spring-kafka-test` (and, specifically, its `EmbeddedKafkaBroker`) is not supported in native images.
+
+Some examples can be seen in the https://github.com/spring-projects/spring-aot-smoke-tests/tree/main/integration[`spring-aot-smoke-tests` GitHub repository].
 
 [appendix]
 [[history]]

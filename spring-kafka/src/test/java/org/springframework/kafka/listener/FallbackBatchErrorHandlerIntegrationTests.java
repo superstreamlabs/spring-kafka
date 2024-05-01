@@ -17,33 +17,32 @@
 package org.springframework.kafka.listener;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.isNull;
-import static org.mockito.BDDMockito.given;
-import static org.mockito.Mockito.mock;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.context.ApplicationEvent;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.event.ConsumerPausedEvent;
+import org.springframework.kafka.event.ConsumerResumedEvent;
 import org.springframework.kafka.event.ConsumerStoppedEvent;
-import org.springframework.kafka.support.TopicPartitionOffset;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.condition.EmbeddedKafkaCondition;
 import org.springframework.kafka.test.context.EmbeddedKafka;
@@ -77,7 +76,6 @@ public class FallbackBatchErrorHandlerIntegrationTests {
 		embeddedKafka = EmbeddedKafkaCondition.getBroker();
 	}
 
-	@SuppressWarnings("deprecation")
 	@Test
 	public void testRetriesAndDlt() throws InterruptedException {
 		Map<String, Object> props = KafkaTestUtils.consumerProps("retryBatch", "false", embeddedKafka);
@@ -96,8 +94,8 @@ public class FallbackBatchErrorHandlerIntegrationTests {
 			throw new ListenerExecutionFailedException("fail for retry batch");
 		});
 
-		KafkaMessageListenerContainer<Integer, String> container =
-				new KafkaMessageListenerContainer<>(cf, containerProps);
+		ConcurrentMessageListenerContainer<Integer, String> container =
+				new ConcurrentMessageListenerContainer<>(cf, containerProps);
 		container.setBeanName("retryBatch");
 		final CountDownLatch recoverLatch = new CountDownLatch(1);
 		final AtomicReference<String> failedGroupId = new AtomicReference<>();
@@ -116,12 +114,23 @@ public class FallbackBatchErrorHandlerIntegrationTests {
 
 		};
 		FallbackBatchErrorHandler errorHandler = new FallbackBatchErrorHandler(new FixedBackOff(0L, 3), recoverer);
-		container.setBatchErrorHandler(errorHandler);
+		container.setCommonErrorHandler(errorHandler);
 		final CountDownLatch stopLatch = new CountDownLatch(1);
-		container.setApplicationEventPublisher(e -> {
-			if (e instanceof ConsumerStoppedEvent) {
-				stopLatch.countDown();
+		List<ApplicationEvent> events = new ArrayList<>();
+		container.setApplicationEventPublisher(new ApplicationEventPublisher() {
+
+			@Override
+			public void publishEvent(ApplicationEvent e) {
+				events.add(e);
+				if (e instanceof ConsumerStoppedEvent) {
+					stopLatch.countDown();
+				}
 			}
+
+			@Override
+			public void publishEvent(Object event) {
+			}
+
 		});
 		container.start();
 
@@ -142,9 +151,16 @@ public class FallbackBatchErrorHandlerIntegrationTests {
 		pf.destroy();
 		consumer.close();
 		assertThat(stopLatch.await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(events.stream()
+				.filter(ev -> ev instanceof ConsumerPausedEvent)
+				.collect(Collectors.toList()))
+				.hasSize(1);
+		assertThat(events.stream()
+				.filter(ev -> ev instanceof ConsumerResumedEvent)
+				.collect(Collectors.toList()))
+				.hasSize(1);
 	}
 
-	@SuppressWarnings("deprecation")
 	@Test
 	public void testRetriesCantRecover() throws InterruptedException {
 		Map<String, Object> props = KafkaTestUtils.consumerProps("retryBatch2", "false", embeddedKafka);
@@ -187,7 +203,7 @@ public class FallbackBatchErrorHandlerIntegrationTests {
 
 		};
 		FallbackBatchErrorHandler errorHandler = new FallbackBatchErrorHandler(new FixedBackOff(0L, 3), recoverer);
-		container.setBatchErrorHandler(errorHandler);
+		container.setCommonErrorHandler(errorHandler);
 		final CountDownLatch stopLatch = new CountDownLatch(1);
 		container.setApplicationEventPublisher(e -> {
 			if (e instanceof ConsumerStoppedEvent) {
@@ -213,33 +229,6 @@ public class FallbackBatchErrorHandlerIntegrationTests {
 		pf.destroy();
 		consumer.close();
 		assertThat(stopLatch.await(10, TimeUnit.SECONDS)).isTrue();
-	}
-
-	@SuppressWarnings({ "unchecked", "deprecation" })
-	@Test
-	void consumerEx() throws InterruptedException {
-		ConsumerFactory<Integer, String> cf = mock(ConsumerFactory.class);
-		Consumer<Integer, String> consumer = mock(Consumer.class);
-		given(consumer.poll(any())).willThrow(new RuntimeException("test"));
-		given(cf.createConsumer(any(), any(), isNull(), any())).willReturn(consumer);
-		ContainerProperties containerProps = new ContainerProperties(new TopicPartitionOffset("foo", 0));
-		KafkaMessageListenerContainer<Integer, String> container = new KafkaMessageListenerContainer<>(cf,
-				containerProps);
-		CountDownLatch called = new CountDownLatch(1);
-		container.setBatchErrorHandler(new FallbackBatchErrorHandler() {
-
-			@Override
-			public void handle(Exception thrownException, ConsumerRecords<?, ?> records, Consumer<?, ?> consumer,
-					MessageListenerContainer container, Runnable invokeListener) {
-
-				called.countDown();
-				super.handle(thrownException, records, consumer, container, invokeListener);
-			}
-		});
-		container.setupMessageListener((BatchMessageListener<Integer, String>) (recs -> { }));
-		container.start();
-		assertThat(called.await(10, TimeUnit.SECONDS)).isTrue();
-		container.stop();
 	}
 
 }

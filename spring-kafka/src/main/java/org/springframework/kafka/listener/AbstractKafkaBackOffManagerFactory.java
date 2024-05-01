@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2021 the original author or authors.
+ * Copyright 2018-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,8 +18,6 @@ package org.springframework.kafka.listener;
 
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
-import org.springframework.context.ApplicationListener;
-import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.kafka.config.KafkaListenerConfigUtils;
 import org.springframework.util.Assert;
 
@@ -27,6 +25,7 @@ import org.springframework.util.Assert;
  * Base class for {@link KafkaBackOffManagerFactory} implementations.
  *
  * @author Tomaz Fernandes
+ * @author Gary Russell
  * @since 2.7
  * @see KafkaConsumerBackoffManager
  */
@@ -38,21 +37,20 @@ public abstract class AbstractKafkaBackOffManagerFactory
 	private ListenerContainerRegistry listenerContainerRegistry;
 
 	/**
-	 * Creates an instance with the provided {@link ListenerContainerRegistry},
-	 * which will be used to fetch the {@link MessageListenerContainer} to back off.
-
-	 * @param listenerContainerRegistry the listenerContainerRegistry to use.
-	 */
-	public AbstractKafkaBackOffManagerFactory(ListenerContainerRegistry listenerContainerRegistry) {
-		this.listenerContainerRegistry = listenerContainerRegistry;
-	}
-
-	/**
 	 * Creates an instance that will retrieve the {@link ListenerContainerRegistry} from
 	 * the {@link ApplicationContext}.
 	 */
 	public AbstractKafkaBackOffManagerFactory() {
 		this.listenerContainerRegistry = null;
+	}
+
+	/**
+	 * Creates an instance with the provided {@link ListenerContainerRegistry},
+	 * which will be used to fetch the {@link MessageListenerContainer} to back off.
+	 * @param listenerContainerRegistry the listenerContainerRegistry to use.
+	 */
+	public AbstractKafkaBackOffManagerFactory(ListenerContainerRegistry listenerContainerRegistry) {
+		this.listenerContainerRegistry = listenerContainerRegistry;
 	}
 
 	/**
@@ -88,12 +86,9 @@ public abstract class AbstractKafkaBackOffManagerFactory
 		return this.applicationContext.getBean(beanName, beanClass);
 	}
 
-	protected void addApplicationListener(ApplicationListener<?> applicationListener) {
-		((ConfigurableApplicationContext) this.applicationContext).addApplicationListener(applicationListener);
-	}
-
 	@Override
-	public void setApplicationContext(ApplicationContext applicationContext) {
+	public final void setApplicationContext(ApplicationContext applicationContext) {
 		this.applicationContext = applicationContext;
 	}
+
 }

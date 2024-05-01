@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2021 the original author or authors.
+ * Copyright 2017-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,6 +28,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -58,7 +59,6 @@ import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.springframework.kafka.transaction.KafkaTransactionManager;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
-import org.springframework.util.concurrent.ListenableFuture;
 
 /**
  * @author Gary Russell
@@ -337,7 +337,7 @@ public class DefaultKafkaConsumerFactoryTests {
 		KafkaTemplate<Integer, String> template = new KafkaTemplate<>(pf);
 		DefaultKafkaProducerFactory<Integer, String> pfTx = new DefaultKafkaProducerFactory<>(producerProps);
 		pfTx.setTransactionIdPrefix("fooTx.");
-		KafkaTemplate<Integer, String> templateTx = new KafkaTemplate<>(pfTx);
+		KafkaOperations<Integer, String> templateTx = new KafkaTemplate<>(pfTx);
 		Map<String, Object> consumerProps = KafkaTestUtils.consumerProps("txCache1Group", "false", this.embeddedKafka);
 		DefaultKafkaConsumerFactory<Integer, String> cf = new DefaultKafkaConsumerFactory<>(consumerProps);
 		AtomicReference<Consumer<Integer, String>> wrapped = new AtomicReference<>();
@@ -362,7 +362,7 @@ public class DefaultKafkaConsumerFactoryTests {
 				containerProps);
 		container.start();
 		try {
-			ListenableFuture<SendResult<Integer, String>> future = template.send("txCache1", "foo");
+			CompletableFuture<SendResult<Integer, String>> future = template.send("txCache1", "foo");
 			future.get(10, TimeUnit.SECONDS);
 			pf.getCache();
 			assertThat(KafkaTestUtils.getPropertyValue(pf, "cache", Map.class)).hasSize(0);
@@ -370,42 +370,6 @@ public class DefaultKafkaConsumerFactoryTests {
 			assertThat(KafkaTestUtils.getPropertyValue(pfTx, "cache", Map.class)).hasSize(1);
 			assertThat(pfTx.getCache()).hasSize(1);
 			assertThat(KafkaTestUtils.getPropertyValue(container, "listenerConsumer.consumer")).isSameAs(wrapped.get());
-		}
-		finally {
-			container.stop();
-			pf.destroy();
-			pfTx.destroy();
-		}
-	}
-
-	@SuppressWarnings("unchecked")
-	@Test
-	public void testContainerTxProducerIsNotCached() throws Exception {
-		Map<String, Object> producerProps = KafkaTestUtils.producerProps(this.embeddedKafka);
-		DefaultKafkaProducerFactory<Integer, String> pf = new DefaultKafkaProducerFactory<>(producerProps);
-		KafkaTemplate<Integer, String> template = new KafkaTemplate<>(pf);
-		DefaultKafkaProducerFactory<Integer, String> pfTx = new DefaultKafkaProducerFactory<>(producerProps);
-		pfTx.setTransactionIdPrefix("fooTx.");
-		KafkaTemplate<Integer, String> templateTx = new KafkaTemplate<>(pfTx);
-		Map<String, Object> consumerProps = KafkaTestUtils.consumerProps("txCache2Group", "false", this.embeddedKafka);
-		DefaultKafkaConsumerFactory<Integer, String> cf = new DefaultKafkaConsumerFactory<>(consumerProps);
-		ContainerProperties containerProps = new ContainerProperties("txCache2");
-		CountDownLatch latch = new CountDownLatch(1);
-		containerProps.setMessageListener((MessageListener<Integer, String>) r -> {
-			templateTx.send("txCacheSendFromListener", "bar");
-			templateTx.send("txCacheSendFromListener", "baz");
-			latch.countDown();
-		});
-		KafkaTransactionManager<Integer, String> tm = new KafkaTransactionManager<>(pfTx);
-		containerProps.setTransactionManager(tm);
-		KafkaMessageListenerContainer<Integer, String> container = new KafkaMessageListenerContainer<>(cf,
-				containerProps);
-		container.start();
-		try {
-			ListenableFuture<SendResult<Integer, String>> future = template.send("txCache2", "foo");
-			future.get(10, TimeUnit.SECONDS);
-			assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
-			assertThat(KafkaTestUtils.getPropertyValue(pfTx, "cache", Map.class)).hasSize(0);
 		}
 		finally {
 			container.stop();

@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2021 the original author or authors.
+ * Copyright 2018-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,6 +44,7 @@ import org.springframework.util.backoff.BackOffExecution;
  * @param <V> the value type.
  *
  * @author Gary Russell
+ * @author Francois Rosiere
  *
  * @since 1.3.5
  *
@@ -113,10 +114,29 @@ public class DefaultAfterRollbackProcessor<K, V> extends FailedRecordProcessor
 	 * {@link KafkaOperations}.
 	 * @since 2.5.3
 	 */
-	public DefaultAfterRollbackProcessor(@Nullable BiConsumer<ConsumerRecord<?, ?>, Exception> recoverer,
-			BackOff backOff, @Nullable KafkaOperations<?, ?> kafkaOperations, boolean commitRecovered) {
+	public DefaultAfterRollbackProcessor(@Nullable
+	BiConsumer<ConsumerRecord<?, ?>, Exception> recoverer,
+		BackOff backOff, @Nullable KafkaOperations<?, ?> kafkaOperations, boolean commitRecovered) {
 
-		super(recoverer, backOff);
+		this(recoverer, backOff, null, kafkaOperations, commitRecovered);
+	}
+
+	/**
+	 * Construct an instance with the provided recoverer which will be called after the
+	 * backOff returns STOP for a topic/partition/offset.
+	 * @param recoverer the recoverer; if null, the default (logging) recoverer is used.
+	 * @param backOff the {@link BackOff}.
+	 * @param backOffHandler the {@link BackOffHandler}.
+	 * @param kafkaOperations for sending the recovered offset to the transaction.
+	 * @param commitRecovered true to commit the recovered record's offset; requires a
+	 * {@link KafkaOperations}.
+	 * @since 2.9
+	 */
+	public DefaultAfterRollbackProcessor(@Nullable BiConsumer<ConsumerRecord<?, ?>, Exception> recoverer,
+			BackOff backOff, @Nullable BackOffHandler backOffHandler, @Nullable KafkaOperations<?, ?> kafkaOperations,
+			boolean commitRecovered) {
+
+		super(recoverer, backOff, backOffHandler);
 		this.kafkaTemplate = kafkaOperations;
 		super.setCommitRecovered(commitRecovered);
 		checkConfig();
@@ -133,20 +153,14 @@ public class DefaultAfterRollbackProcessor<K, V> extends FailedRecordProcessor
 	public void process(List<ConsumerRecord<K, V>> records, Consumer<K, V> consumer,
 			@Nullable MessageListenerContainer container, Exception exception, boolean recoverable, EOSMode eosMode) {
 
-		if (SeekUtils.doSeeks(((List) records), consumer, exception, recoverable,
-				getRecoveryStrategy((List) records, exception), container, this.logger)
+		if (SeekUtils.doSeeks((List) records, consumer, exception, recoverable,
+				getFailureTracker()::recovered, container, this.logger)
 					&& isCommitRecovered() && this.kafkaTemplate.isTransactional()) {
 			ConsumerRecord<K, V> skipped = records.get(0);
-			if (EOSMode.V1.equals(eosMode.getMode())) {
-				this.kafkaTemplate.sendOffsetsToTransaction(
-						Collections.singletonMap(new TopicPartition(skipped.topic(), skipped.partition()),
-								new OffsetAndMetadata(skipped.offset() + 1)));
-			}
-			else {
-				this.kafkaTemplate.sendOffsetsToTransaction(
-						Collections.singletonMap(new TopicPartition(skipped.topic(), skipped.partition()),
-								new OffsetAndMetadata(skipped.offset() + 1)), consumer.groupMetadata());
-			}
+			this.kafkaTemplate.sendOffsetsToTransaction(
+					Collections.singletonMap(new TopicPartition(skipped.topic(), skipped.partition()),
+							createOffsetAndMetadata(container, skipped.offset() + 1)
+					), consumer.groupMetadata());
 		}
 
 		if (!recoverable && this.backOff != null) {
@@ -172,4 +186,10 @@ public class DefaultAfterRollbackProcessor<K, V> extends FailedRecordProcessor
 		this.lastIntervals.remove();
 	}
 
+	private static OffsetAndMetadata createOffsetAndMetadata(@Nullable MessageListenerContainer container, long offset) {
+		if (container == null) {
+			return new OffsetAndMetadata(offset);
+		}
+		return ListenerUtils.createOffsetAndMetadata(container, offset);
+	}
 }

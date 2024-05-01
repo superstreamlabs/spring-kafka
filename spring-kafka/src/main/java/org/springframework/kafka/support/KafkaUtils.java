@@ -42,7 +42,9 @@ import org.springframework.util.ClassUtils;
  */
 public final class KafkaUtils {
 
-	private static Function<ProducerRecord<?, ?>, String> prFormatter = rec -> rec.toString();
+	private static final ThreadLocal<Boolean> LOG_METADATA_ONLY = new ThreadLocal<>();
+
+	private static Function<ProducerRecord<?, ?>, String> prFormatter = ProducerRecord::toString;
 
 	private static Function<ConsumerRecord<?, ?>, String> crFormatter =
 			rec -> rec.topic() + "-" + rec.partition() + "@" + rec.offset();
@@ -144,8 +146,17 @@ public final class KafkaUtils {
 	}
 
 	/**
-	 * Set a formatter for logging {@link ConsumerRecord}s; default is
-	 * {@code topic-partition@offset}.
+	 * Set to true to only log record metadata.
+	 * @param onlyMeta true to only log record metadata.
+	 * @since 2.7.12
+	 * @see #recordToString(ConsumerRecord)
+	 */
+	public static void setLogOnlyMetadata(boolean onlyMeta) {
+		LOG_METADATA_ONLY.set(onlyMeta);
+	}
+
+	/**
+	 * Set a formatter for logging {@link ConsumerRecord}s.
 	 * @param formatter a function to format the record as a String
 	 * @since 2.7.12
 	 */
@@ -155,8 +166,7 @@ public final class KafkaUtils {
 	}
 
 	/**
-	 * Set a formatter for logging {@link ProducerRecord}s; default is
-	 * {@link ProducerRecord#toString()}.
+	 * Set a formatter for logging {@link ProducerRecord}s.
 	 * @param formatter a function to format the record as a String
 	 * @since 2.7.12
 	 */
@@ -173,23 +183,6 @@ public final class KafkaUtils {
 	 * @since 2.7.12
 	 */
 	public static String format(ConsumerRecord<?, ?> record) {
-		return crFormatter.apply(record);
-	}
-
-	/**
-	 * Format the {@link ConsumerRecord} for logging; default
-	 * {@code topic-partition@offset}. Provided for backwards compatibility only.
-	 * @param record the record to format.
-	 * @param full use {@link ConsumerRecord#toString()}.
-	 * @return the formatted String.
-	 * @since 2.7.12
-	 * @deprecated in favor of {@link #format(ConsumerRecord)}.
-	 */
-	@Deprecated
-	public static String format(ConsumerRecord<?, ?> record, boolean full) {
-		if (full) {
-			return record.toString();
-		}
 		return crFormatter.apply(record);
 	}
 

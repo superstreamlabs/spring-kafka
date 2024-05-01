@@ -21,10 +21,11 @@ import java.util.Collection;
 import java.util.function.Consumer;
 
 import org.apache.commons.logging.LogFactory;
-import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
+import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.BeanFactory;
+import org.springframework.beans.factory.BeanFactoryAware;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.core.log.LogAccessor;
@@ -33,8 +34,9 @@ import org.springframework.kafka.config.KafkaListenerContainerFactory;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistrar;
 import org.springframework.kafka.config.MethodKafkaListenerEndpoint;
 import org.springframework.kafka.config.MultiMethodKafkaListenerEndpoint;
-import org.springframework.kafka.listener.ListenerUtils;
 import org.springframework.kafka.support.EndpointHandlerMethod;
+import org.springframework.kafka.support.KafkaUtils;
+import org.springframework.kafka.support.TopicForRetryable;
 import org.springframework.lang.Nullable;
 
 
@@ -56,7 +58,7 @@ import org.springframework.lang.Nullable;
  * <p>How it works:
  *
  * <p>If a message processing throws an exception, the configured
- * {@link org.springframework.kafka.listener.SeekToCurrentErrorHandler}
+ * {@link org.springframework.kafka.listener.DefaultErrorHandler}
  * and {@link org.springframework.kafka.listener.DeadLetterPublishingRecoverer} forwards the message to the next topic, using a
  * {@link org.springframework.kafka.retrytopic.DestinationTopicResolver}
  * to know the next topic and the delay for it.
@@ -136,11 +138,25 @@ import org.springframework.lang.Nullable;
  *
  * <p>The other, non-exclusive way to configure the endpoints is through the convenient
  * {@link org.springframework.kafka.annotation.RetryableTopic} annotation, that can be placed on any
- * {@link org.springframework.kafka.annotation.KafkaListener} annotated methods, such as:
+ * {@link org.springframework.kafka.annotation.KafkaListener} annotated methods, directly, such as:
  *
  * <pre>
  *     <code>@RetryableTopic(attempts = 3,
  *     		backoff = @Backoff(delay = 700, maxDelay = 12000, multiplier = 3))</code>
+ *     <code>@KafkaListener(topics = "my-annotated-topic")
+ *     public void processMessage(MyPojo message) {
+ *        		// ... message processing
+ *     }</code>
+ *</pre>
+ * <p> Or through meta-annotations, such as:
+ * <pre>
+ *     <code>@RetryableTopic(backoff = @Backoff(delay = 700, maxDelay = 12000, multiplier = 3))</code>
+ *     <code>public @interface WithExponentialBackoffRetry {</code>
+ *     <code>   	{@literal @}AliasFor(attribute = "attempts", annotation = RetryableTopic.class)
+ *        	String retries();
+ *     }</code>
+ *
+ *     <code>@WithExponentialBackoffRetry(retries = "3")</code>
  *     <code>@KafkaListener(topics = "my-annotated-topic")
  *     public void processMessage(MyPojo message) {
  *        		// ... message processing
@@ -152,7 +168,7 @@ import org.springframework.lang.Nullable;
  * <p>DLT Handling:
  *
  * <p>The DLT handler method can be provided through the
- * {@link RetryTopicConfigurationBuilder#dltHandlerMethod(Class, String)} method,
+ * {@link RetryTopicConfigurationBuilder#dltHandlerMethod(String, String)} method,
  * providing the class and method name that should handle the DLT topic. If a bean
  * instance of this type is found in the {@link BeanFactory} it is the instance used.
  * If not an instance is created. The class can use dependency injection as a normal bean.
@@ -190,17 +206,19 @@ import org.springframework.lang.Nullable;
  * If no DLT handler is provided, the default {@link LoggingDltListenerHandlerMethod} is used.
  *
  * @author Tomaz Fernandes
+ * @author Fabio da Silva Jr.
+ * @author Gary Russell
  * @since 2.7
  *
  * @see RetryTopicConfigurationBuilder
  * @see org.springframework.kafka.annotation.RetryableTopic
  * @see org.springframework.kafka.annotation.KafkaListener
  * @see org.springframework.retry.annotation.Backoff
- * @see org.springframework.kafka.listener.SeekToCurrentErrorHandler
+ * @see org.springframework.kafka.listener.DefaultErrorHandler
  * @see org.springframework.kafka.listener.DeadLetterPublishingRecoverer
  *
  */
-public class RetryTopicConfigurer {
+public class RetryTopicConfigurer implements BeanFactoryAware {
 
 	private static final LogAccessor LOGGER = new LogAccessor(LogFactory.getLog(RetryTopicConfigurer.class));
 
@@ -216,20 +234,9 @@ public class RetryTopicConfigurer {
 
 	private final ListenerContainerFactoryConfigurer listenerContainerFactoryConfigurer;
 
-	private final BeanFactory beanFactory;
+	private BeanFactory beanFactory;
 
 	private final RetryTopicNamesProviderFactory retryTopicNamesProviderFactory;
-
-	private boolean useLegacyFactoryConfigurer = false;
-
-	@Deprecated
-	public RetryTopicConfigurer(DestinationTopicProcessor destinationTopicProcessor,
-								ListenerContainerFactoryResolver containerFactoryResolver,
-								ListenerContainerFactoryConfigurer listenerContainerFactoryConfigurer,
-								BeanFactory beanFactory) {
-
-		this(destinationTopicProcessor, containerFactoryResolver, listenerContainerFactoryConfigurer, beanFactory, new SuffixingRetryTopicNamesProviderFactory());
-	}
 
 	/**
 	 * Create an instance with the provided properties.
@@ -239,17 +246,34 @@ public class RetryTopicConfigurer {
 	 * @param beanFactory the bean factory.
 	 * @param retryTopicNamesProviderFactory the retry topic names factory.
 	 */
-	@Autowired
+	@Deprecated(since = "2.9", forRemoval = true) // in 3.1
 	public RetryTopicConfigurer(DestinationTopicProcessor destinationTopicProcessor,
 								ListenerContainerFactoryResolver containerFactoryResolver,
 								ListenerContainerFactoryConfigurer listenerContainerFactoryConfigurer,
 								BeanFactory beanFactory,
 								RetryTopicNamesProviderFactory retryTopicNamesProviderFactory) {
 
+		this(destinationTopicProcessor, containerFactoryResolver,
+				listenerContainerFactoryConfigurer, retryTopicNamesProviderFactory);
+		this.beanFactory = beanFactory;
+	}
+
+	/**
+	 * Create an instance with the provided properties.
+	 * @param destinationTopicProcessor the destination topic processor.
+	 * @param containerFactoryResolver the container factory resolver.
+	 * @param listenerContainerFactoryConfigurer the container factory configurer.
+	 * @param retryTopicNamesProviderFactory the retry topic names factory.
+	 */
+	@Autowired
+	public RetryTopicConfigurer(DestinationTopicProcessor destinationTopicProcessor,
+								ListenerContainerFactoryResolver containerFactoryResolver,
+								ListenerContainerFactoryConfigurer listenerContainerFactoryConfigurer,
+								RetryTopicNamesProviderFactory retryTopicNamesProviderFactory) {
+
 		this.destinationTopicProcessor = destinationTopicProcessor;
 		this.containerFactoryResolver = containerFactoryResolver;
 		this.listenerContainerFactoryConfigurer = listenerContainerFactoryConfigurer;
-		this.beanFactory = beanFactory;
 		this.retryTopicNamesProviderFactory = retryTopicNamesProviderFactory;
 	}
 
@@ -274,8 +298,12 @@ public class RetryTopicConfigurer {
 											@Nullable KafkaListenerContainerFactory<?> factory,
 											String defaultContainerFactoryBeanName) {
 		throwIfMultiMethodEndpoint(mainEndpoint);
-		DestinationTopicProcessor.Context context =
-				new DestinationTopicProcessor.Context(configuration.getDestinationTopicProperties());
+		String id = mainEndpoint.getId();
+		if (id == null) {
+			id = "no.id.provided";
+		}
+		DestinationTopicProcessor.Context context = new DestinationTopicProcessor.Context(id,
+				configuration.getDestinationTopicProperties());
 		configureEndpoints(mainEndpoint, endpointProcessor, factory, registrar, configuration, context,
 				defaultContainerFactoryBeanName);
 		this.destinationTopicProcessor.processRegisteredDestinations(getTopicCreationFunction(configuration), context);
@@ -313,11 +341,21 @@ public class RetryTopicConfigurer {
 						? resolveAndConfigureFactoryForMainEndpoint(factory, defaultFactoryBeanName, configuration)
 						: resolveAndConfigureFactoryForRetryEndpoint(factory, defaultFactoryBeanName, configuration);
 
-		MethodKafkaListenerEndpoint<?, ?> endpoint = destinationTopicProperties.isMainEndpoint()
-				? mainEndpoint
-				: new MethodKafkaListenerEndpoint<>();
+		MethodKafkaListenerEndpoint<?, ?> endpoint;
+		if (destinationTopicProperties.isMainEndpoint()) {
+			endpoint = mainEndpoint;
+		}
+		else {
+			endpoint = new MethodKafkaListenerEndpoint<>();
+			endpoint.setId(mainEndpoint.getId());
+			endpoint.setMainListenerId(mainEndpoint.getId());
+		}
 
 		endpointProcessor.accept(endpoint);
+		Integer concurrency = configuration.getConcurrency();
+		if (!destinationTopicProperties.isMainEndpoint() && concurrency != null) {
+			endpoint.setConcurrency(concurrency);
+		}
 
 		EndpointHandlerMethod endpointBeanMethod =
 				getEndpointHandlerMethod(mainEndpoint, configuration, destinationTopicProperties);
@@ -350,10 +388,14 @@ public class RetryTopicConfigurer {
 	}
 
 	protected void createNewTopicBeans(Collection<String> topics, RetryTopicConfiguration.TopicCreation config) {
-		topics.forEach(topic ->
-				((DefaultListableBeanFactory) this.beanFactory)
-						.registerSingleton(topic + "-topicRegistrationBean",
-								new NewTopic(topic, config.getNumPartitions(), config.getReplicationFactor()))
+		topics.forEach(topic -> {
+				DefaultListableBeanFactory bf = ((DefaultListableBeanFactory) this.beanFactory);
+				String beanName = topic + "-topicRegistrationBean";
+				if (!bf.containsBean(beanName)) {
+					bf.registerSingleton(beanName,
+							new TopicForRetryable(topic, config.getNumPartitions(), config.getReplicationFactor()));
+				}
+			}
 		);
 	}
 
@@ -371,35 +413,29 @@ public class RetryTopicConfigurer {
 		return dltEndpointHandlerMethod != null ? dltEndpointHandlerMethod : DEFAULT_DLT_HANDLER;
 	}
 
-	@SuppressWarnings("deprecation")
 	private KafkaListenerContainerFactory<?> resolveAndConfigureFactoryForMainEndpoint(
 			KafkaListenerContainerFactory<?> providedFactory,
 			String defaultFactoryBeanName, RetryTopicConfiguration configuration) {
+
 		ConcurrentKafkaListenerContainerFactory<?, ?> resolvedFactory = this.containerFactoryResolver
 				.resolveFactoryForMainEndpoint(providedFactory, defaultFactoryBeanName,
 						configuration.forContainerFactoryResolver());
 
-		return this.useLegacyFactoryConfigurer
-				? this.listenerContainerFactoryConfigurer
-				.configureWithoutBackOffValues(resolvedFactory, configuration.forContainerFactoryConfigurer())
-				: this.listenerContainerFactoryConfigurer
-					.decorateFactoryWithoutSettingContainerProperties(resolvedFactory,
-							configuration.forContainerFactoryConfigurer());
+		return this.listenerContainerFactoryConfigurer
+				.decorateFactoryWithoutSettingContainerProperties(resolvedFactory,
+						configuration.forContainerFactoryConfigurer());
 	}
 
-	@SuppressWarnings("deprecation")
 	private KafkaListenerContainerFactory<?> resolveAndConfigureFactoryForRetryEndpoint(
 			KafkaListenerContainerFactory<?> providedFactory,
 			String defaultFactoryBeanName,
 			RetryTopicConfiguration configuration) {
+
 		ConcurrentKafkaListenerContainerFactory<?, ?> resolvedFactory =
 				this.containerFactoryResolver.resolveFactoryForRetryEndpoint(providedFactory, defaultFactoryBeanName,
 				configuration.forContainerFactoryResolver());
-		return this.useLegacyFactoryConfigurer
-				? this.listenerContainerFactoryConfigurer.configure(resolvedFactory,
-					configuration.forContainerFactoryConfigurer())
-				: this.listenerContainerFactoryConfigurer
-					.decorateFactory(resolvedFactory, configuration.forContainerFactoryConfigurer());
+		return this.listenerContainerFactoryConfigurer
+				.decorateFactory(resolvedFactory, configuration.forContainerFactoryConfigurer());
 	}
 
 	private void throwIfMultiMethodEndpoint(MethodKafkaListenerEndpoint<?, ?> mainEndpoint) {
@@ -416,15 +452,9 @@ public class RetryTopicConfigurer {
 		return new EndpointHandlerMethod(bean, method);
 	}
 
-	/**
-	 * Set to true if you want the {@link ListenerContainerFactoryConfigurer} to
-	 * behave as before 2.8.3.
-	 * @param useLegacyFactoryConfigurer Whether to use the legacy factory configuration.
-	 * @deprecated for removal after the deprecated legacy configuration methods are removed.
-	 */
-	@Deprecated
-	public void useLegacyFactoryConfigurer(boolean useLegacyFactoryConfigurer) {
-		this.useLegacyFactoryConfigurer = useLegacyFactoryConfigurer;
+	@Override
+	public void setBeanFactory(BeanFactory beanFactory) throws BeansException {
+		this.beanFactory = beanFactory;
 	}
 
 	public interface EndpointProcessor extends Consumer<MethodKafkaListenerEndpoint<?, ?>> {
@@ -438,11 +468,10 @@ public class RetryTopicConfigurer {
 
 		public static final String DEFAULT_DLT_METHOD_NAME = "logMessage";
 
-		@SuppressWarnings("deprecation")
 		public void logMessage(Object message) {
 			if (message instanceof ConsumerRecord) {
 				LOGGER.info(() -> "Received message in dlt listener: "
-						+ ListenerUtils.recordToString((ConsumerRecord<?, ?>) message));
+						+ KafkaUtils.format((ConsumerRecord<?, ?>) message));
 			}
 			else {
 				LOGGER.info(() -> "Received message in dlt listener.");

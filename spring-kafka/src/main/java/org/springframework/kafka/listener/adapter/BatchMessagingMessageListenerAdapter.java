@@ -149,8 +149,8 @@ public class BatchMessagingMessageListenerAdapter<K, V> extends MessagingMessage
 		if (!isConsumerRecordList()) {
 			if (isMessageList() || this.batchToRecordAdapter != null) {
 				List<Message<?>> messages = new ArrayList<>(records.size());
-				for (ConsumerRecord<K, V> record : records) {
-					messages.add(toMessagingMessage(record, acknowledgment, consumer));
+				for (ConsumerRecord<K, V> cRecord : records) {
+					messages.add(toMessagingMessage(cRecord, acknowledgment, consumer));
 				}
 				if (this.batchToRecordAdapter == null) {
 					message = MessageBuilder.withPayload(messages).build();
@@ -188,7 +188,7 @@ public class BatchMessagingMessageListenerAdapter<K, V> extends MessagingMessage
 					if (message.equals(NULL_MESSAGE)) {
 						message = new GenericMessage<>(records);
 					}
-					Object result = this.errorHandler.handleError(message, e, consumer);
+					Object result = this.errorHandler.handleError(message, e, consumer, acknowledgment);
 					if (result != null) {
 						handleResult(result, records, message);
 					}

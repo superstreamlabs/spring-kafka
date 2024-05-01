@@ -17,13 +17,19 @@
 package org.springframework.kafka.listener;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.Set;
 import java.util.function.BiConsumer;
 
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.common.TopicPartition;
 
+import org.springframework.classify.BinaryExceptionClassifier;
 import org.springframework.core.log.LogAccessor;
 import org.springframework.kafka.KafkaException;
+import org.springframework.kafka.support.KafkaUtils;
 import org.springframework.util.backoff.BackOff;
 import org.springframework.util.backoff.BackOffExecution;
 
@@ -53,18 +59,31 @@ public final class ErrorHandlingUtils {
 	 * @param recoverer the recoverer.
 	 * @param logger the logger.
 	 * @param logLevel the log level.
+	 * @param retryListeners the retry listeners.
+	 * @param classifier the exception classifier.
+	 * @since 2.8.11
 	 */
 	public static void retryBatch(Exception thrownException, ConsumerRecords<?, ?> records, Consumer<?, ?> consumer,
 			MessageListenerContainer container, Runnable invokeListener, BackOff backOff,
 			CommonErrorHandler seeker, BiConsumer<ConsumerRecords<?, ?>, Exception> recoverer, LogAccessor logger,
-			KafkaException.Level logLevel) {
+			KafkaException.Level logLevel, List<RetryListener> retryListeners, BinaryExceptionClassifier classifier) {
 
 		BackOffExecution execution = backOff.start();
 		long nextBackOff = execution.nextBackOff();
 		String failed = null;
-		consumer.pause(consumer.assignment());
+		Set<TopicPartition> assignment = consumer.assignment();
+		consumer.pause(assignment);
+		int attempt = 1;
+		listen(retryListeners, records, thrownException, attempt++);
+		ConsumerRecord<?, ?> first = records.iterator().next();
+		MessageListenerContainer childOrSingle = container.getContainerFor(first.topic(), first.partition());
+		if (childOrSingle instanceof ConsumerPauseResumeEventPublisher) {
+			((ConsumerPauseResumeEventPublisher) childOrSingle)
+					.publishConsumerPausedEvent(assignment, "For batch retry");
+		}
 		try {
-			while (nextBackOff != BackOffExecution.STOP) {
+			Boolean retryable = classifier.classify(unwrapIfNeeded(thrownException));
+			while (Boolean.TRUE.equals(retryable) && nextBackOff != BackOffExecution.STOP) {
 				consumer.poll(Duration.ZERO);
 				try {
 					ListenerUtils.stoppableSleep(container, nextBackOff);
@@ -81,26 +100,39 @@ public final class ErrorHandlingUtils {
 					invokeListener.run();
 					return;
 				}
-				catch (Exception e) {
+				catch (Exception ex) {
+					listen(retryListeners, records, ex, attempt++);
 					if (failed == null) {
 						failed = recordsToString(records);
 					}
 					String toLog = failed;
-					logger.debug(e, () -> "Retry failed for: " + toLog);
+					logger.debug(ex, () -> "Retry failed for: " + toLog);
 				}
 				nextBackOff = execution.nextBackOff();
 			}
 			try {
 				recoverer.accept(records, thrownException);
+				retryListeners.forEach(listener -> listener.recovered(records, thrownException));
 			}
-			catch (Exception e) {
-				logger.error(e, () -> "Recoverer threw an exception; re-seeking batch");
+			catch (Exception ex) {
+				logger.error(ex, () -> "Recoverer threw an exception; re-seeking batch");
+				retryListeners.forEach(listener -> listener.recoveryFailed(records, thrownException, ex));
 				seeker.handleBatch(thrownException, records, consumer, container, () -> { });
 			}
 		}
 		finally {
-			consumer.resume(consumer.assignment());
+			Set<TopicPartition> assignment2 = consumer.assignment();
+			consumer.resume(assignment2);
+			if (childOrSingle instanceof ConsumerPauseResumeEventPublisher) {
+				((ConsumerPauseResumeEventPublisher) childOrSingle).publishConsumerResumedEvent(assignment2);
+			}
 		}
+	}
+
+	private static void listen(List<RetryListener> listeners, ConsumerRecords<?, ?> records,
+			Exception thrownException, int attempt) {
+
+		listeners.forEach(listener -> listener.failedDelivery(records, thrownException, attempt));
 	}
 
 	/**
@@ -108,14 +140,31 @@ public final class ErrorHandlingUtils {
 	 * @param records the records.
 	 * @return the String.
 	 */
-	@SuppressWarnings("deprecation")
 	public static String recordsToString(ConsumerRecords<?, ?> records) {
 		StringBuffer sb = new StringBuffer();
 		records.spliterator().forEachRemaining(rec -> sb
-				.append(ListenerUtils.recordToString(rec, true))
+				.append(KafkaUtils.format(rec))
 				.append(','));
 		sb.deleteCharAt(sb.length() - 1);
 		return sb.toString();
+	}
+
+	/**
+	 * Remove a {@link TimestampedException}, if present.
+	 * Remove a {@link ListenerExecutionFailedException}, if present.
+	 * @param exception the exception.
+	 * @return the unwrapped cause or cause of cause.
+	 * @since 2.8.11
+	 */
+	public static Exception unwrapIfNeeded(Exception exception) {
+		Exception theEx = exception;
+		if (theEx instanceof TimestampedException && theEx.getCause() instanceof Exception cause) {
+			theEx = cause;
+		}
+		if (theEx instanceof ListenerExecutionFailedException && theEx.getCause() instanceof Exception cause) {
+			theEx = cause;
+		}
+		return theEx;
 	}
 
 }

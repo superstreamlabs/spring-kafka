@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 the original author or authors.
+ * Copyright 2021-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,8 @@
 package org.springframework.kafka.retrytopic;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 import java.util.List;
 import java.util.Map;
@@ -44,6 +46,8 @@ import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
@@ -61,7 +65,8 @@ class RetryTopicConfigurationIntegrationTests {
 
 	@Test
 	void includeTopic(@Autowired EmbeddedKafkaBroker broker, @Autowired ConsumerFactory<Integer, String> cf,
-			@Autowired KafkaTemplate<Integer, String> template, @Autowired Config config) throws InterruptedException {
+			@Autowired KafkaTemplate<Integer, String> template, @Autowired Config config,
+			@Autowired RetryTopicComponentFactory componentFactory) throws InterruptedException {
 
 		Consumer<Integer, String> consumer = cf.createConsumer("grp2", "");
 		Map<String, List<PartitionInfo>> topics = consumer.listTopics();
@@ -70,11 +75,12 @@ class RetryTopicConfigurationIntegrationTests {
 				"RetryTopicConfigurationIntegrationTests.1-retry-110");
 		template.send(TOPIC1, "foo");
 		assertThat(config.latch.await(10, TimeUnit.SECONDS)).isTrue();
+		verify(componentFactory).destinationTopicResolver();
 	}
 
 	@Configuration(proxyBeanMethods = false)
 	@EnableKafka
-	static class Config {
+	static class Config extends RetryTopicConfigurationSupport {
 
 		private final CountDownLatch latch = new CountDownLatch(1);
 
@@ -85,6 +91,11 @@ class RetryTopicConfigurationIntegrationTests {
 
 		void dlt(String in) {
 			this.latch.countDown();
+		}
+
+		@Bean
+		RetryTopicComponentFactory componentFactory() {
+			return spy(new RetryTopicComponentFactory());
 		}
 
 		@Bean
@@ -119,14 +130,18 @@ class RetryTopicConfigurationIntegrationTests {
 			return new KafkaAdmin(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, broker.getBrokersAsString()));
 		}
 
-		@SuppressWarnings("deprecation")
 		@Bean
 		RetryTopicConfiguration retryTopicConfiguration1(KafkaTemplate<Integer, String> template) {
 			return RetryTopicConfigurationBuilder.newInstance()
 					.includeTopic(TOPIC1)
 					.exponentialBackoff(100, 1.1, 110)
-					.dltHandlerMethod(getClass(), "dlt")
+					.dltHandlerMethod("retryTopicConfigurationIntegrationTests.Config", "dlt")
 					.create(template);
+		}
+
+		@Bean
+		TaskScheduler sched() {
+			return new ThreadPoolTaskScheduler();
 		}
 
 	}

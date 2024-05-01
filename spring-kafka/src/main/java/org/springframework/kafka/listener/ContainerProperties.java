@@ -30,8 +30,9 @@ import org.aopalliance.aop.Advice;
 import org.springframework.aop.framework.Advised;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.aop.support.AopUtils;
-import org.springframework.core.task.AsyncListenableTaskExecutor;
+import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.kafka.support.TopicPartitionOffset;
+import org.springframework.kafka.support.micrometer.KafkaListenerObservationConvention;
 import org.springframework.lang.Nullable;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -147,55 +148,9 @@ public class ContainerProperties extends ConsumerProperties {
 	public enum EOSMode {
 
 		/**
-		 * 'transactional.id' fencing (0.11 - 2.4 brokers).
-		 * @deprecated 3.0 and later will require 2.5+ brokers
-		 */
-		@Deprecated
-		V1,
-
-		/**
 		 *  fetch-offset-request fencing (2.5+ brokers).
 		 */
-		V2,
-
-		/**
-		 * 'transactional.id' fencing (0.11 - 2.4 brokers).
-		 * @deprecated in favor of {@link #V1}.
-		 */
-		@Deprecated
-		ALPHA(V1),
-
-		/**
-		 *  fetch-offset-request fencing (2.5+ brokers).
-		 *  @deprecated in favor of {@link #V2}.
-		 */
-		@Deprecated
-		BETA(V2);
-
-
-		private final EOSMode mode;
-
-		EOSMode() {
-			this.mode = this;
-		}
-
-		/**
-		 * Create an alias.
-		 * @param v12 the mode for which this is an alias.
-		 */
-		EOSMode(EOSMode v12) {
-			this.mode = v12;
-		}
-
-		/**
-		 * Return the mode or the aliased mode.
-		 * @return the mode.
-		 * @deprecated aliases will be removed in 3.0
-		 */
-		@Deprecated
-		public EOSMode getMode() {
-			return this.mode;
-		}
+		V2;
 
 	}
 
@@ -277,7 +232,7 @@ public class ContainerProperties extends ConsumerProperties {
 	/**
 	 * The executor for threads that poll the consumer.
 	 */
-	private AsyncListenableTaskExecutor consumerTaskExecutor;
+	private AsyncTaskExecutor listenerTaskExecutor;
 
 	/**
 	 * The timeout for shutting down the container. This is the maximum amount of
@@ -308,6 +263,8 @@ public class ContainerProperties extends ConsumerProperties {
 
 	private boolean micrometerEnabled = true;
 
+	private boolean observationEnabled;
+
 	private Duration consumerStartTimeout = DEFAULT_CONSUMER_START_TIMEOUT;
 
 	private Boolean subBatchPerPartition;
@@ -325,6 +282,10 @@ public class ContainerProperties extends ConsumerProperties {
 	private boolean stopImmediate;
 
 	private boolean asyncAcks;
+
+	private boolean pauseImmediate;
+
+	private KafkaListenerObservationConvention observationConvention;
 
 	/**
 	 * Create properties for a container that will subscribe to the specified topics.
@@ -424,10 +385,11 @@ public class ContainerProperties extends ConsumerProperties {
 
 	/**
 	 * Set the executor for threads that poll the consumer.
-	 * @param consumerTaskExecutor the executor
+	 * @param listenerTaskExecutor the executor
+	 * @since 2.8.9
 	 */
-	public void setConsumerTaskExecutor(@Nullable AsyncListenableTaskExecutor consumerTaskExecutor) {
-		this.consumerTaskExecutor = consumerTaskExecutor;
+	public void setListenerTaskExecutor(@Nullable AsyncTaskExecutor listenerTaskExecutor) {
+		this.listenerTaskExecutor = listenerTaskExecutor;
 	}
 
 	/**
@@ -510,8 +472,8 @@ public class ContainerProperties extends ConsumerProperties {
 	 * @return the executor.
 	 */
 	@Nullable
-	public AsyncListenableTaskExecutor getConsumerTaskExecutor() {
-		return this.consumerTaskExecutor;
+	public AsyncTaskExecutor getListenerTaskExecutor() {
+		return this.listenerTaskExecutor;
 	}
 
 	public long getShutdownTimeout() {
@@ -553,9 +515,13 @@ public class ContainerProperties extends ConsumerProperties {
 	}
 
 	/**
-	 * Set the transaction manager to start a transaction; offsets are committed with
-	 * semantics equivalent to {@link AckMode#RECORD} and {@link AckMode#BATCH} depending
-	 * on the listener type (record or batch).
+	 * Set the transaction manager to start a transaction; if it is a
+	 * {@link org.springframework.kafka.transaction.KafkaAwareTransactionManager}, offsets
+	 * are committed with semantics equivalent to {@link AckMode#RECORD} and
+	 * {@link AckMode#BATCH} depending on the listener type (record or batch). For other
+	 * transaction managers, adding the transaction manager to the container facilitates,
+	 * for example, a record or batch interceptor participating in the same transaction
+	 * (you must set the container's {@code interceptBeforeTx} property to false).
 	 * @param transactionManager the transaction manager.
 	 * @since 1.3
 	 * @see #setAckMode(AckMode)
@@ -674,11 +640,26 @@ public class ContainerProperties extends ConsumerProperties {
 
 	/**
 	 * Set to false to disable the Micrometer listener timers. Default true.
+	 * Disabled when {@link #setObservationEnabled(boolean)} is true.
 	 * @param micrometerEnabled false to disable.
 	 * @since 2.3
 	 */
 	public void setMicrometerEnabled(boolean micrometerEnabled) {
 		this.micrometerEnabled = micrometerEnabled;
+	}
+
+	public boolean isObservationEnabled() {
+		return this.observationEnabled;
+	}
+
+	/**
+	 * Set to true to enable observation via Micrometer.
+	 * @param observationEnabled true to enable.
+	 * @since 3.0
+	 * @see #setMicrometerEnabled(boolean)
+	 */
+	public void setObservationEnabled(boolean observationEnabled) {
+		this.observationEnabled = observationEnabled;
 	}
 
 	/**
@@ -700,11 +681,6 @@ public class ContainerProperties extends ConsumerProperties {
 		return this.consumerStartTimeout;
 	}
 
-	@Deprecated
-	public Duration getConsumerStartTimout() {
-		return this.consumerStartTimeout;
-	}
-
 	/**
 	 * Set the timeout to wait for a consumer thread to start before logging
 	 * an error. Default 30 seconds.
@@ -713,11 +689,6 @@ public class ContainerProperties extends ConsumerProperties {
 	public void setConsumerStartTimeout(Duration consumerStartTimeout) {
 		Assert.notNull(consumerStartTimeout, "'consumerStartTimout' cannot be null");
 		this.consumerStartTimeout = consumerStartTimeout;
-	}
-
-	@Deprecated
-	public void setConsumerStartTimout(Duration consumerStartTimeout) {
-		setConsumerStartTimeout(consumerStartTimeout);
 	}
 
 	/**
@@ -797,13 +768,8 @@ public class ContainerProperties extends ConsumerProperties {
 	}
 
 	/**
-	 * Set the exactly once semantics mode. When {@link EOSMode#V1} a producer per
-	 * group/topic/partition is used (enabling 'transactional.id fencing`).
-	 * {@link EOSMode#V2} enables fetch-offset-request fencing, and requires brokers 2.5
-	 * or later. With the 2.6 client, the default is now V2 because the 2.6 client can
-	 * automatically fall back to ALPHA.
-	 * IMPORTANT the 3.0 clients cannot be used with {@link EOSMode#V2} unless the broker
-	 * is 2.5 or higher.
+	 * Set the exactly once semantics mode. Only {@link EOSMode#V2} is supported
+	 * since version 3.0.
 	 * @param eosMode the mode; default V2.
 	 * @since 2.5
 	 */
@@ -930,6 +896,27 @@ public class ContainerProperties extends ConsumerProperties {
 		this.asyncAcks = asyncAcks;
 	}
 
+	/**
+	 * When pausing the container with a record listener, whether the pause takes effect
+	 * immediately, when the current record has been processed, or after all records from
+	 * the previous poll have been processed. Default false.
+	 * @return whether to pause immediately.
+	 * @since 2.9
+	 */
+	public boolean isPauseImmediate() {
+		return this.pauseImmediate;
+	}
+
+	/**
+	 * Set to true to pause the container after the current record has been processed, rather
+	 * than after all the records from the previous poll have been processed.
+	 * @param pauseImmediate true to pause immediately.
+	 * @since 2.9
+	 */
+	public void setPauseImmediate(boolean pauseImmediate) {
+		this.pauseImmediate = pauseImmediate;
+	}
+
 	private void adviseListenerIfNeeded() {
 		if (!CollectionUtils.isEmpty(this.adviceChain)) {
 			if (AopUtils.isAopProxy(this.messageListener)) {
@@ -945,6 +932,19 @@ public class ContainerProperties extends ConsumerProperties {
 		}
 	}
 
+	public KafkaListenerObservationConvention getObservationConvention() {
+		return this.observationConvention;
+	}
+
+	/**
+	 * Set a custom {@link KafkaListenerObservationConvention}.
+	 * @param observationConvention the convention.
+	 * @since 3.0
+	 */
+	public void setObservationConvention(KafkaListenerObservationConvention observationConvention) {
+		this.observationConvention = observationConvention;
+	}
+
 	@Override
 	public String toString() {
 		return "ContainerProperties ["
@@ -953,8 +953,8 @@ public class ContainerProperties extends ConsumerProperties {
 				+ "\n ackCount=" + this.ackCount
 				+ "\n ackTime=" + this.ackTime
 				+ "\n messageListener=" + this.messageListener
-				+ (this.consumerTaskExecutor != null
-						? "\n consumerTaskExecutor=" + this.consumerTaskExecutor
+				+ (this.listenerTaskExecutor != null
+						? "\n listenerTaskExecutor=" + this.listenerTaskExecutor
 						: "")
 				+ "\n shutdownTimeout=" + this.shutdownTimeout
 				+ "\n idleEventInterval="
@@ -975,7 +975,12 @@ public class ContainerProperties extends ConsumerProperties {
 				+ "\n stopContainerWhenFenced=" + this.stopContainerWhenFenced
 				+ "\n stopImmediate=" + this.stopImmediate
 				+ "\n asyncAcks=" + this.asyncAcks
-				+ "\n idleBeforeDataMultiplier" + this.idleBeforeDataMultiplier
+				+ "\n idleBeforeDataMultiplier=" + this.idleBeforeDataMultiplier
+				+ "\n micrometerEnabled=" + this.micrometerEnabled
+				+ "\n observationEnabled=" + this.observationEnabled
+				+ (this.observationConvention != null
+						? "\n observationConvention=" + this.observationConvention
+						: "")
 				+ "\n]";
 	}
 

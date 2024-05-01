@@ -59,7 +59,6 @@ import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
-import org.springframework.kafka.listener.ContainerProperties.EOSMode;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
@@ -133,7 +132,6 @@ public class SubBatchPerPartitionTests {
 		this.registry.stop();
 	}
 
-	@SuppressWarnings("deprecation")
 	@Test
 	void defaults() {
 		Map<String, Object> props = KafkaTestUtils.consumerProps("sbpp", "false", this.broker);
@@ -156,27 +154,6 @@ public class SubBatchPerPartitionTests {
 				.isEqualTo(Boolean.TRUE);
 		container.stop();
 
-		containerProps = new ContainerProperties("sbpp");
-		containerProps.setMessageListener(mock(MessageListener.class));
-		containerProps.setTransactionManager(mock(PlatformTransactionManager.class));
-		containerProps.setEosMode(EOSMode.V1);
-		container = new KafkaMessageListenerContainer<>(cf, containerProps);
-		container.start();
-		assertThat(KafkaTestUtils.getPropertyValue(container, "listenerConsumer.subBatchPerPartition"))
-				.isEqualTo(Boolean.TRUE);
-		container.stop();
-
-		containerProps = new ContainerProperties("sbpp");
-		containerProps.setMessageListener(mock(MessageListener.class));
-		containerProps.setTransactionManager(mock(PlatformTransactionManager.class));
-		containerProps.setEosMode(EOSMode.V2);
-		container = new KafkaMessageListenerContainer<>(cf, containerProps);
-		container.start();
-		assertThat(KafkaTestUtils.getPropertyValue(container, "listenerConsumer.subBatchPerPartition"))
-				.isEqualTo(Boolean.FALSE);
-		container.stop();
-
-		// default is BETA
 		containerProps = new ContainerProperties("sbpp");
 		containerProps.setMessageListener(mock(MessageListener.class));
 		containerProps.setTransactionManager(mock(PlatformTransactionManager.class));

@@ -75,6 +75,8 @@ public class KafkaListenerEndpointRegistry implements ListenerContainerRegistry,
 
 	protected final LogAccessor logger = new LogAccessor(LogFactory.getLog(getClass())); //NOSONAR
 
+	private final Map<String, MessageListenerContainer> unregisteredContainers = new ConcurrentHashMap<>();
+
 	private final Map<String, MessageListenerContainer> listenerContainers = new ConcurrentHashMap<>();
 
 	private int phase = AbstractMessageListenerContainer.DEFAULT_PHASE;
@@ -82,6 +84,8 @@ public class KafkaListenerEndpointRegistry implements ListenerContainerRegistry,
 	private ConfigurableApplicationContext applicationContext;
 
 	private boolean contextRefreshed;
+
+	private boolean alwaysStartAfterRefresh = true;
 
 	private volatile boolean running;
 
@@ -105,6 +109,31 @@ public class KafkaListenerEndpointRegistry implements ListenerContainerRegistry,
 	public MessageListenerContainer getListenerContainer(String id) {
 		Assert.hasText(id, "Container identifier must not be empty");
 		return this.listenerContainers.get(id);
+	}
+
+	@Override
+	@Nullable
+	public MessageListenerContainer getUnregisteredListenerContainer(String id) {
+		MessageListenerContainer container = this.unregisteredContainers.get(id);
+		if (container == null) {
+			refreshContextContainers();
+			return this.unregisteredContainers.get(id);
+		}
+		return null;
+	}
+
+	/**
+	 * By default, containers registered for endpoints after the context is refreshed
+	 * are immediately started, regardless of their autoStartup property, to comply with
+	 * the {@link SmartLifecycle} contract, where autoStartup is only considered during
+	 * context initialization. Set to false to apply the autoStartup property, even for
+	 * late endpoint binding. If this is called after the context is refreshed, it will
+	 * apply to any endpoints registered after that call.
+	 * @param alwaysStartAfterRefresh false to apply the property.
+	 * @since 2.8.7
+	 */
+	public void setAlwaysStartAfterRefresh(boolean alwaysStartAfterRefresh) {
+		this.alwaysStartAfterRefresh = alwaysStartAfterRefresh;
 	}
 
 	/**
@@ -140,8 +169,15 @@ public class KafkaListenerEndpointRegistry implements ListenerContainerRegistry,
 	public Collection<MessageListenerContainer> getAllListenerContainers() {
 		List<MessageListenerContainer> containers = new ArrayList<>();
 		containers.addAll(getListenerContainers());
-		containers.addAll(this.applicationContext.getBeansOfType(MessageListenerContainer.class, true, false).values());
+		refreshContextContainers();
+		containers.addAll(this.unregisteredContainers.values());
 		return containers;
+	}
+
+	private void refreshContextContainers() {
+		this.unregisteredContainers.clear();
+		this.applicationContext.getBeansOfType(MessageListenerContainer.class, true, false).values()
+				.forEach(container -> this.unregisteredContainers.put(container.getListenerId(), container));
 	}
 
 	/**
@@ -204,6 +240,22 @@ public class KafkaListenerEndpointRegistry implements ListenerContainerRegistry,
 				startIfNecessary(container);
 			}
 		}
+	}
+
+	/**
+	 * Unregister the listener container with the provided id.
+	 * <p>
+	 * IMPORTANT: this method simply removes the container from the registry. It does NOT
+	 * call any {@link org.springframework.context.Lifecycle} or {@link DisposableBean}
+	 * methods; you need to call them before or after calling this method to shut down the
+	 * container.
+	 * @param id the id.
+	 * @return the container, if it was registered; null otherwise.
+	 * @since 2.8.9
+	 */
+	@Nullable
+	public MessageListenerContainer unregisterListenerContainer(String id) {
+		return this.listenerContainers.remove(id);
 	}
 
 	/**
@@ -327,7 +379,7 @@ public class KafkaListenerEndpointRegistry implements ListenerContainerRegistry,
 	 * @see MessageListenerContainer#isAutoStartup()
 	 */
 	private void startIfNecessary(MessageListenerContainer listenerContainer) {
-		if (this.contextRefreshed || listenerContainer.isAutoStartup()) {
+		if ((this.contextRefreshed && this.alwaysStartAfterRefresh) || listenerContainer.isAutoStartup()) {
 			listenerContainer.start();
 		}
 	}

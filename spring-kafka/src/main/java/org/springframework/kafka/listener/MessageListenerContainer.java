@@ -25,6 +25,7 @@ import org.apache.kafka.common.TopicPartition;
 
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.lang.Nullable;
 
 /**
@@ -35,6 +36,7 @@ import org.springframework.lang.Nullable;
  * @author Gary Russell
  * @author Vladimir Tsanev
  * @author Tomaz Fernandes
+ * @author Francois Rosiere
  */
 public interface MessageListenerContainer extends SmartLifecycle, DisposableBean {
 
@@ -189,9 +191,30 @@ public interface MessageListenerContainer extends SmartLifecycle, DisposableBean
 	 * @return the id or bean name.
 	 * @since 2.2.5
 	 */
-	@Nullable
 	default String getListenerId() {
 		throw new UnsupportedOperationException("This container does not support retrieving the listener id");
+	}
+
+	/**
+	 * The 'id' attribute of the main {@code @KafkaListener} container, if this container
+	 * is for a retry topic; null otherwise.
+	 * @return the id.
+	 * @since 3.0
+	 */
+	@Nullable
+	default String getMainListenerId() {
+		throw new UnsupportedOperationException("This container does not support retrieving the main listener id");
+	}
+
+	/**
+	 * Get arbitrary static information that will be added to the
+	 * {@link KafkaHeaders#LISTENER_INFO} header of all records.
+	 * @return the info.
+	 * @since 2.8.6
+	 */
+	@Nullable
+	default byte[] getListenerInfo() {
+		throw new UnsupportedOperationException("This container does not support retrieving the listener info");
 	}
 
 	/**
@@ -224,6 +247,17 @@ public interface MessageListenerContainer extends SmartLifecycle, DisposableBean
  	 */
 	default void stopAbnormally(Runnable callback) {
 		stop(callback);
+	}
+
+	/**
+	 * If this container has child containers, return the child container that is assigned
+	 * the topic/partition. Return this when there are no child containers.
+	 * @param topic the topic.
+	 * @param partition the partition.
+	 * @return the container.
+	 */
+	default MessageListenerContainer getContainerFor(String topic, int partition) {
+		return this;
 	}
 
 	@Override

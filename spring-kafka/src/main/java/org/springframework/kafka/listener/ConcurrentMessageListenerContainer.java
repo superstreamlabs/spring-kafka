@@ -33,7 +33,7 @@ import org.apache.kafka.common.TopicPartition;
 
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.core.task.AsyncListenableTaskExecutor;
+import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.support.TopicPartitionOffset;
@@ -62,7 +62,7 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 
 	private final List<KafkaMessageListenerContainer<K, V>> containers = new ArrayList<>();
 
-	private final List<AsyncListenableTaskExecutor> executors = new ArrayList<>();
+	private final List<AsyncTaskExecutor> executors = new ArrayList<>();
 
 	private int concurrency = 1;
 
@@ -115,6 +115,23 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 	public List<KafkaMessageListenerContainer<K, V>> getContainers() {
 		synchronized (this.lifecycleMonitor) {
 			return Collections.unmodifiableList(new ArrayList<>(this.containers));
+		}
+	}
+
+	@Override
+	public MessageListenerContainer getContainerFor(String topic, int partition) {
+		synchronized (this.lifecycleMonitor) {
+			for (KafkaMessageListenerContainer<K, V> container : this.containers) {
+				Collection<TopicPartition> assignedPartitions = container.getAssignedPartitions();
+				if (assignedPartitions != null) {
+					for (TopicPartition part : assignedPartitions) {
+						if (part.topic().equals(topic) && part.partition() == partition) {
+							return container;
+						}
+					}
+				}
+			}
+			return this;
 		}
 	}
 
@@ -233,11 +250,9 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 		container.setBatchInterceptor(getBatchInterceptor());
 		container.setInterceptBeforeTx(isInterceptBeforeTx());
 		container.setListenerInfo(getListenerInfo());
-		container.setEmergencyStop(() -> {
-			stopAbnormally(() -> {
-			});
-		});
-		AsyncListenableTaskExecutor exec = container.getContainerProperties().getConsumerTaskExecutor();
+		container.setEmergencyStop(() -> stopAbnormally(() -> {
+		}));
+		AsyncTaskExecutor exec = container.getContainerProperties().getListenerTaskExecutor();
 		if (exec == null) {
 			if ((this.executors.size() > index)) {
 				exec = this.executors.get(index);
@@ -246,7 +261,7 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 				exec = new SimpleAsyncTaskExecutor(beanName + "-C-");
 				this.executors.add(exec);
 			}
-			container.getContainerProperties().setConsumerTaskExecutor(exec);
+			container.getContainerProperties().setListenerTaskExecutor(exec);
 		}
 	}
 
@@ -347,7 +362,6 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 	@Override
 	public void pausePartition(TopicPartition topicPartition) {
 		synchronized (this.lifecycleMonitor) {
-			super.pausePartition(topicPartition);
 			this.containers
 					.stream()
 					.filter(container -> containsPartition(topicPartition, container))
@@ -358,7 +372,6 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 	@Override
 	public void resumePartition(TopicPartition topicPartition) {
 		synchronized (this.lifecycleMonitor) {
-			super.resumePartition(topicPartition);
 			this.containers
 					.stream()
 					.filter(container -> containsPartition(topicPartition, container))
@@ -368,18 +381,22 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 
 	@Override
 	public boolean isPartitionPaused(TopicPartition topicPartition) {
-		return this
-				.containers
-				.stream()
-				.anyMatch(container -> container.isPartitionPaused(topicPartition));
+		synchronized (this.lifecycleMonitor) {
+			return this
+					.containers
+					.stream()
+					.anyMatch(container -> container.isPartitionPaused(topicPartition));
+		}
 	}
 
 	@Override
 	public boolean isInExpectedState() {
-		return (isRunning() || isStoppedNormally()) && this.containers
-				.stream()
-				.map(container -> container.isInExpectedState())
-				.allMatch(bool -> Boolean.TRUE.equals(bool));
+		synchronized (this.lifecycleMonitor) {
+			return (isRunning() || isStoppedNormally()) && this.containers
+					.stream()
+					.map(container -> container.isInExpectedState())
+					.allMatch(bool -> Boolean.TRUE.equals(bool));
+		}
 	}
 
 	private boolean containsPartition(TopicPartition topicPartition, KafkaMessageListenerContainer<K, V> container) {

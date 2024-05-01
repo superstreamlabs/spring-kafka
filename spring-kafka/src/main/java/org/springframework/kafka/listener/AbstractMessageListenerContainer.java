@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2021 the original author or authors.
+ * Copyright 2016-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -48,6 +49,7 @@ import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.event.ContainerStoppedEvent;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.kafka.support.TopicPartitionOffset;
+import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
@@ -67,6 +69,8 @@ public abstract class AbstractMessageListenerContainer<K, V>
 		implements GenericMessageListenerContainer<K, V>, BeanNameAware, ApplicationEventPublisherAware,
 			ApplicationContextAware {
 
+	private static final String VERSION_2_8 = "2.8";
+
 	/**
 	 * The default {@link org.springframework.context.SmartLifecycle} phase for listener
 	 * containers {@value #DEFAULT_PHASE}.
@@ -85,10 +89,12 @@ public abstract class AbstractMessageListenerContainer<K, V>
 
 	private final Set<TopicPartition> pauseRequestedPartitions = ConcurrentHashMap.newKeySet();
 
-	private String beanName;
+	@NonNull
+	private String beanName = "noBeanNameSet";
 
 	private ApplicationEventPublisher applicationEventPublisher;
 
+	@SuppressWarnings("deprecation")
 	private GenericErrorHandler<?> errorHandler;
 
 	private CommonErrorHandler commonErrorHandler;
@@ -117,6 +123,14 @@ public abstract class AbstractMessageListenerContainer<K, V>
 	private volatile boolean paused;
 
 	private volatile boolean stoppedNormally = true;
+
+	@Nullable
+	private String mainListenerId;
+
+	private boolean changeConsumerThreadName;
+
+	@NonNull
+	private Function<MessageListenerContainer, String> threadNameSupplier = container -> container.getListenerId();
 
 	/**
 	 * Construct an instance with the provided factory and properties.
@@ -213,7 +227,7 @@ public abstract class AbstractMessageListenerContainer<K, V>
 	 * @deprecated in favor of {@link #setCommonErrorHandler(CommonErrorHandler)}
 	 * @see #setCommonErrorHandler(CommonErrorHandler)
 	 */
-	@Deprecated
+	@Deprecated(since = VERSION_2_8, forRemoval = true) // in 3.1
 	public void setErrorHandler(ErrorHandler errorHandler) {
 		this.errorHandler = errorHandler;
 	}
@@ -225,7 +239,7 @@ public abstract class AbstractMessageListenerContainer<K, V>
 	 * @deprecated in favor of {@link #setCommonErrorHandler(CommonErrorHandler)}
 	 * @see #setCommonErrorHandler(CommonErrorHandler)
 	 */
-	@Deprecated
+	@Deprecated(since = VERSION_2_8, forRemoval = true) // in 3.1
 	public void setGenericErrorHandler(@Nullable GenericErrorHandler<?> errorHandler) {
 		this.errorHandler = errorHandler;
 	}
@@ -237,7 +251,7 @@ public abstract class AbstractMessageListenerContainer<K, V>
 	 * @deprecated in favor of {@link #setCommonErrorHandler(CommonErrorHandler)}
 	 * @see #setCommonErrorHandler(CommonErrorHandler)
 	 */
-	@Deprecated
+	@Deprecated(since = VERSION_2_8, forRemoval = true) // in 3.1
 	public void setBatchErrorHandler(BatchErrorHandler errorHandler) {
 		this.errorHandler = errorHandler;
 	}
@@ -249,7 +263,7 @@ public abstract class AbstractMessageListenerContainer<K, V>
 	 * @deprecated in favor of {@link #getCommonErrorHandler()}
 	 * @see #getCommonErrorHandler()
 	 */
-	@Deprecated
+	@Deprecated(since = VERSION_2_8, forRemoval = true) // in 3.1
 	@Nullable
 	public GenericErrorHandler<?> getGenericErrorHandler() {
 		return this.errorHandler;
@@ -370,18 +384,27 @@ public abstract class AbstractMessageListenerContainer<K, V>
 	}
 
 	@Override
-	@Nullable
 	public String getListenerId() {
 		return this.beanName; // the container factory sets the bean name to the id attribute
 	}
 
 	/**
-	 * Get arbitrary static information that will be added to the
-	 * {@link KafkaHeaders#LISTENER_INFO} header of all records.
-	 * @return the info.
-	 * @since 2.8.4
+	 * Set the main listener id, if this container is for a retry topic.
+	 * @param id the id.
+	 * @since 3.0.
 	 */
+	public void setMainListenerId(String id) {
+		this.mainListenerId = id;
+	}
+
+	@Override
 	@Nullable
+	public String getMainListenerId() {
+		return this.mainListenerId;
+	}
+
+	@Nullable
+	@Override
 	public byte[] getListenerInfo() {
 		return this.listenerInfo != null ? Arrays.copyOf(this.listenerInfo, this.listenerInfo.length) : null;
 	}
@@ -404,6 +427,48 @@ public abstract class AbstractMessageListenerContainer<K, V>
 	 */
 	public void setTopicCheckTimeout(int topicCheckTimeout) {
 		this.topicCheckTimeout = topicCheckTimeout;
+	}
+
+	/**
+	 * Return true if the container should change the consumer thread name during
+	 * initialization.
+	 * @return true to change.
+	 * @since 3.0.1
+	 */
+	public boolean isChangeConsumerThreadName() {
+		return this.changeConsumerThreadName;
+	}
+
+	/**
+	 * Set to true to instruct the container to change the consumer thread name during
+	 * initialization.
+	 * @param changeConsumerThreadName true to change.
+	 * @since 3.0.1
+	 * @see #setThreadNameSupplier(Function)
+	 */
+	public void setChangeConsumerThreadName(boolean changeConsumerThreadName) {
+		this.changeConsumerThreadName = changeConsumerThreadName;
+	}
+
+	/**
+	 * Return the function used to change the consumer thread name.
+	 * @return the function.
+	 * @since 3.0.1
+	 */
+	public Function<MessageListenerContainer, String> getThreadNameSupplier() {
+		return this.threadNameSupplier;
+	}
+
+	/**
+	 * Set a function used to change the consumer thread name. The default returns the
+	 * container {@code listenerId}.
+	 * @param threadNameSupplier the function.
+	 * @since 3.0.1
+	 * @see #setChangeConsumerThreadName(boolean)
+	 */
+	public void setThreadNameSupplier(Function<MessageListenerContainer, String> threadNameSupplier) {
+		Assert.notNull(threadNameSupplier, "'threadNameSupplier' cannot be null");
+		this.threadNameSupplier = threadNameSupplier;
 	}
 
 	protected RecordInterceptor<K, V> getRecordInterceptor() {
@@ -485,7 +550,7 @@ public abstract class AbstractMessageListenerContainer<K, V>
 								.toArray(String[]::new);
 					}
 					DescribeTopicsResult result = client.describeTopics(Arrays.asList(topics));
-					missing = result.values()
+					missing = result.topicNameValues()
 							.entrySet()
 							.stream()
 							.filter(entry -> {
@@ -493,7 +558,11 @@ public abstract class AbstractMessageListenerContainer<K, V>
 									entry.getValue().get(this.topicCheckTimeout, TimeUnit.SECONDS);
 									return false;
 								}
-								catch (@SuppressWarnings("unused") Exception e) {
+								catch (InterruptedException ex) {
+									Thread.currentThread().interrupt();
+									return true;
+								}
+								catch (@SuppressWarnings("unused") Exception ex) {
 									return true;
 								}
 							})
@@ -555,9 +624,7 @@ public abstract class AbstractMessageListenerContainer<K, V>
 					}
 				}
 				else {
-					doStop(() -> {
-						publishContainerStoppedEvent();
-					});
+					doStop(this::publishContainerStoppedEvent);
 				}
 			}
 		}

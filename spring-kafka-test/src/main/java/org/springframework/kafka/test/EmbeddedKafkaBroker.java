@@ -50,6 +50,7 @@ import org.apache.kafka.clients.admin.CreateTopicsResult;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
+import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.security.auth.SecurityProtocol;
 import org.apache.kafka.common.utils.AppInfoParser;
@@ -71,8 +72,6 @@ import org.springframework.retry.support.RetryTemplate;
 import org.springframework.util.Assert;
 
 import kafka.cluster.EndPoint;
-import kafka.common.KafkaException;
-import kafka.server.KafkaBroker;
 import kafka.server.KafkaConfig;
 import kafka.server.KafkaServer;
 import kafka.utils.CoreUtils;
@@ -91,6 +90,7 @@ import kafka.zookeeper.ZooKeeperClient;
  * @author Elliot Kennedy
  * @author Nakul Mishra
  * @author Pawel Lozinski
+ * @author Adrian Chlebosz
  *
  * @since 2.2
  */
@@ -114,15 +114,13 @@ public class EmbeddedKafkaBroker implements InitializingBean, DisposableBean {
 	 */
 	public static final String BROKER_LIST_PROPERTY = "spring.embedded.kafka.brokers.property";
 
-	private static final Duration DEFAULT_ADMIN_TIMEOUT = Duration.ofSeconds(10);
+	public static final int DEFAULT_ADMIN_TIMEOUT = 10;
 
 	public static final int DEFAULT_ZK_SESSION_TIMEOUT = 18000;
 
 	public static final int DEFAULT_ZK_CONNECTION_TIMEOUT = DEFAULT_ZK_SESSION_TIMEOUT;
 
 	private static final Method GET_BROKER_STATE_METHOD;
-
-	private static final Method BOUND_PORT_METHOD;
 
 	static {
 		try {
@@ -138,22 +136,6 @@ public class EmbeddedKafkaBroker implements InitializingBean, DisposableBean {
 			throw new IllegalStateException("Failed to determine KafkaServer.brokerState() method; client version: "
 					+ AppInfoParser.getVersion(), e);
 		}
-		Method method = null;
-		try {
-			method = TestUtils.class.getDeclaredMethod("boundPort", KafkaServer.class, SecurityProtocol.class);
-		}
-		catch (NoSuchMethodException | SecurityException e) {
-			try {
-				method = TestUtils.class.getDeclaredMethod("boundPort", KafkaBroker.class, SecurityProtocol.class);
-			}
-			catch (NoSuchMethodException | SecurityException e1) {
-				IllegalStateException isx = new IllegalStateException("Failed to determine TestUtils.boundPort() method; client version: "
-						+ AppInfoParser.getVersion(), e);
-				isx.addSuppressed(e1);
-				throw isx; // NOSONAR
-			}
-		}
-		BOUND_PORT_METHOD = method;
 	}
 
 	private final int count;
@@ -176,7 +158,7 @@ public class EmbeddedKafkaBroker implements InitializingBean, DisposableBean {
 
 	private int[] kafkaPorts;
 
-	private Duration adminTimeout = DEFAULT_ADMIN_TIMEOUT;
+	private Duration adminTimeout = Duration.ofSeconds(DEFAULT_ADMIN_TIMEOUT);
 
 	private int zkConnectionTimeout = DEFAULT_ZK_CONNECTION_TIMEOUT;
 
@@ -257,26 +239,6 @@ public class EmbeddedKafkaBroker implements InitializingBean, DisposableBean {
 	}
 
 	/**
-	 * Set an explicit port for the embedded Zookeeper.
-	 * @param port the port.
-	 * @return the {@link EmbeddedKafkaBroker}.
-	 * @since 2.3
-	 */
-	public EmbeddedKafkaBroker zkPort(int port) {
-		this.zkPort = port;
-		return this;
-	}
-	/**
-	 * Set the timeout in seconds for admin operations (e.g. topic creation, close).
-	 * Default 30 seconds.
-	 * @param adminTimeout the timeout.
-	 * @since 2.2
-	 */
-	public void setAdminTimeout(int adminTimeout) {
-		this.adminTimeout = Duration.ofSeconds(adminTimeout);
-	}
-
-	/**
 	 * Set the system property with this name to the list of broker addresses.
 	 * @param brokerListProperty the brokerListProperty to set
 	 * @return this broker.
@@ -284,6 +246,17 @@ public class EmbeddedKafkaBroker implements InitializingBean, DisposableBean {
 	 */
 	public EmbeddedKafkaBroker brokerListProperty(String brokerListProperty) {
 		this.brokerListProperty = brokerListProperty;
+		return this;
+	}
+
+	/**
+	 * Set an explicit port for the embedded Zookeeper.
+	 * @param port the port.
+	 * @return the {@link EmbeddedKafkaBroker}.
+	 * @since 2.3
+	 */
+	public EmbeddedKafkaBroker zkPort(int port) {
+		this.zkPort = port;
 		return this;
 	}
 
@@ -303,6 +276,27 @@ public class EmbeddedKafkaBroker implements InitializingBean, DisposableBean {
 	 */
 	public void setZkPort(int zkPort) {
 		this.zkPort = zkPort;
+	}
+
+	/**
+	 * Set the timeout in seconds for admin operations (e.g. topic creation, close).
+	 * @param adminTimeout the timeout.
+	 * @return the {@link EmbeddedKafkaBroker}
+	 * @since 2.8.5
+	 */
+	public EmbeddedKafkaBroker adminTimeout(int adminTimeout) {
+		this.adminTimeout = Duration.ofSeconds(adminTimeout);
+		return this;
+	}
+
+	/**
+	 * Set the timeout in seconds for admin operations (e.g. topic creation, close).
+	 * Default 10 seconds.
+	 * @param adminTimeout the timeout.
+	 * @since 2.2
+	 */
+	public void setAdminTimeout(int adminTimeout) {
+		this.adminTimeout = Duration.ofSeconds(adminTimeout);
 	}
 
 	/**
@@ -356,12 +350,7 @@ public class EmbeddedKafkaBroker implements InitializingBean, DisposableBean {
 			KafkaServer server = TestUtils.createServer(new KafkaConfig(brokerConfigProperties), Time.SYSTEM);
 			this.kafkaServers.add(server);
 			if (this.kafkaPorts[i] == 0) {
-				try {
-					this.kafkaPorts[i] = (int) BOUND_PORT_METHOD.invoke(null, server, SecurityProtocol.PLAINTEXT);
-				}
-				catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException e) {
-					throw new IllegalStateException("Failed to determine broker port", e);
-				}
+				this.kafkaPorts[i] = TestUtils.boundPort(server, SecurityProtocol.PLAINTEXT);
 			}
 		}
 		createKafkaTopics(this.topics);

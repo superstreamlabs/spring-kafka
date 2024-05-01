@@ -25,6 +25,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -110,6 +111,31 @@ public class ErrorHandlingDeserializerTests {
 		ehd.close();
 	}
 
+	@Test
+	void notSerializable() {
+		class MyDes implements Deserializer<String> {
+
+			@Override
+			public String deserialize(String topic, byte[] data) {
+				return null;
+			}
+
+			@Override
+			public String deserialize(String topic, Headers headers, byte[] data) {
+				throw new CannotSerializeException("original exception message");
+			}
+
+		}
+		ErrorHandlingDeserializer<String> ehd = new ErrorHandlingDeserializer<>(new MyDes());
+		Headers headers = new RecordHeaders();
+		ehd.deserialize("foo", headers, new byte[1]);
+		DeserializationException dex = ListenerUtils.byteArrayToDeserializationException(null,
+				headers.lastHeader(SerializationUtils.VALUE_DESERIALIZER_EXCEPTION_HEADER).value());
+		assertThat(dex.getCause().getMessage())
+				.contains("Could not serialize")
+				.contains("original exception message");
+	}
+
 	@Configuration
 	@EnableKafka
 	public static class Config {
@@ -156,15 +182,22 @@ public class ErrorHandlingDeserializerTests {
 			ConcurrentKafkaListenerContainerFactory<String, String> factory =
 					new ConcurrentKafkaListenerContainerFactory<>();
 			factory.setConsumerFactory(cf);
-			factory.setErrorHandler((t, r) -> {
-				if (r.value() == null && t.getCause() instanceof DeserializationException) {
-					this.valueErrorCount.incrementAndGet();
-					this.headers = ((DeserializationException) t.getCause()).getHeaders();
+			factory.setCommonErrorHandler(new CommonErrorHandler() {
+
+				@Override
+				public void handleRecord(Exception t, ConsumerRecord<?, ?> r,
+						Consumer<?, ?> consumer, MessageListenerContainer container) {
+
+					if (r.value() == null && t.getCause() instanceof DeserializationException) {
+						valueErrorCount.incrementAndGet();
+						headers = ((DeserializationException) t.getCause()).getHeaders();
+					}
+					else if (r.key() == null && t.getCause() instanceof DeserializationException) {
+						keyErrorCount.incrementAndGet();
+					}
+					latch.countDown();
 				}
-				else if (r.key() == null && t.getCause() instanceof DeserializationException) {
-					this.keyErrorCount.incrementAndGet();
-				}
-				this.latch.countDown();
+
 			});
 			return factory;
 		}
@@ -234,6 +267,21 @@ public class ErrorHandlingDeserializerTests {
 	}
 
 	public static class ExtendedEHD<T> extends ErrorHandlingDeserializer<T> {
+
+	}
+
+	@SuppressWarnings("serial")
+	public static class CannotSerializeException extends RuntimeException {
+
+		private final Foo foo = new Foo();
+
+		public CannotSerializeException(String message) {
+			super(message);
+		}
+
+	}
+
+	public static class Foo {
 
 	}
 

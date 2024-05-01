@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 the original author or authors.
+ * Copyright 2021-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,8 +29,8 @@ import org.springframework.util.Assert;
 
 /**
  * A {@link CommonErrorHandler} that stops the container when an error occurs. Replaces
- * the legacy {@link ContainerStoppingErrorHandler} and
- * {@link ContainerStoppingBatchErrorHandler}.
+ * the legacy {@code ContainerStoppingErrorHandler} and
+ * {@code ContainerStoppingBatchErrorHandler}.
  *
  * @author Gary Russell
  * @since 2.8
@@ -71,7 +71,14 @@ public class CommonContainerStoppingErrorHandler extends KafkaExceptionLogLevelA
 	}
 
 	@Override
+	@Deprecated(since = "2.9", forRemoval = true) // in 3.1
 	public boolean remainingRecords() {
+		return true;
+	}
+
+	@Override
+	public boolean seeksAfterHandling() {
+		// We don't actually do any seeks here, but stopping the container has the same effect.
 		return true;
 	}
 

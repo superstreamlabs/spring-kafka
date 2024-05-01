@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2021 the original author or authors.
+ * Copyright 2017-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -88,8 +88,6 @@ public class StreamsBuilderFactoryBean extends AbstractFactoryBean<StreamsBuilde
 	private KafkaStreams.StateListener stateListener;
 
 	private StateRestoreListener stateRestoreListener;
-
-	private Thread.UncaughtExceptionHandler uncaughtExceptionHandler;
 
 	private StreamsUncaughtExceptionHandler streamsUncaughtExceptionHandler;
 
@@ -189,17 +187,6 @@ public class StreamsBuilderFactoryBean extends AbstractFactoryBean<StreamsBuilde
 
 	public void setStateListener(KafkaStreams.StateListener stateListener) {
 		this.stateListener = stateListener; // NOSONAR (sync)
-	}
-
-	/**
-	 * Obsolete.
-	 * @param exceptionHandler the handler.
-	 * @deprecated in favor of
-	 * {@link #setStreamsUncaughtExceptionHandler(StreamsUncaughtExceptionHandler)}.
-	 */
-	@Deprecated
-	public void setUncaughtExceptionHandler(Thread.UncaughtExceptionHandler exceptionHandler) {
-		this.uncaughtExceptionHandler = exceptionHandler; // NOSONAR (sync)
 	}
 
 	/**
@@ -335,25 +322,21 @@ public class StreamsBuilderFactoryBean extends AbstractFactoryBean<StreamsBuilde
 		}
 	}
 
-	@SuppressWarnings("deprecation")
 	@Override
 	public synchronized void start() {
 		if (!this.running) {
 			try {
 				Assert.state(this.properties != null,
 						"streams configuration properties must not be null");
-				Topology topology = getObject().build(this.properties); // NOSONAR: getObject() cannot return null
-				this.infrastructureCustomizer.configureTopology(topology);
-				this.topology = topology;
-				LOGGER.debug(() -> topology.describe().toString());
-				this.kafkaStreams = new KafkaStreams(topology, this.properties, this.clientSupplier);
+				Topology topol = getObject().build(this.properties); // NOSONAR: getObject() cannot return null
+				this.infrastructureCustomizer.configureTopology(topol);
+				this.topology = topol;
+				LOGGER.debug(() -> topol.describe().toString());
+				this.kafkaStreams = new KafkaStreams(topol, this.properties, this.clientSupplier);
 				this.kafkaStreams.setStateListener(this.stateListener);
 				this.kafkaStreams.setGlobalStateRestoreListener(this.stateRestoreListener);
 				if (this.streamsUncaughtExceptionHandler != null) {
 					this.kafkaStreams.setUncaughtExceptionHandler(this.streamsUncaughtExceptionHandler);
-				}
-				else {
-					this.kafkaStreams.setUncaughtExceptionHandler(this.uncaughtExceptionHandler);
 				}
 				if (this.kafkaStreamsCustomizer != null) {
 					this.kafkaStreamsCustomizer.customize(this.kafkaStreams);

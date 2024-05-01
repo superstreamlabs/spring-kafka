@@ -22,9 +22,9 @@ import java.util.Properties;
 import java.util.regex.Pattern;
 
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetCommitCallback;
 
-import org.springframework.kafka.support.KafkaUtils;
 import org.springframework.kafka.support.LogIfLevelEnabled;
 import org.springframework.kafka.support.TopicPartitionOffset;
 import org.springframework.lang.Nullable;
@@ -91,14 +91,18 @@ public class ConsumerProperties {
 	private OffsetCommitCallback commitCallback;
 
 	/**
+	 * A provider for {@link OffsetAndMetadata}; by default, the provider creates an offset and metadata with
+	 * empty metadata. The provider gives a way to customize the metadata.
+	 */
+	private OffsetAndMetadataProvider offsetAndMetadataProvider;
+
+	/**
 	 * Whether or not to call consumer.commitSync() or commitAsync() when the
 	 * container is responsible for commits. Default true.
 	 */
 	private boolean syncCommits = true;
 
 	private LogIfLevelEnabled.Level commitLogLevel = LogIfLevelEnabled.Level.DEBUG;
-
-	private boolean onlyLogRecordMetadata = true;
 
 	private Properties kafkaConsumerProperties = new Properties();
 
@@ -279,12 +283,31 @@ public class ConsumerProperties {
 	}
 
 	/**
+	 * Set the offset and metadata provider associated to a commit callback.
+	 * @param offsetAndMetadataProvider an offset and metadata provider.
+	 * @since 2.8.5
+	 * @see #setCommitCallback(OffsetCommitCallback)
+	 */
+	public void setOffsetAndMetadataProvider(OffsetAndMetadataProvider offsetAndMetadataProvider) {
+		this.offsetAndMetadataProvider = offsetAndMetadataProvider;
+	}
+
+	/**
 	 * Return the commit callback.
 	 * @return the callback.
 	 */
 	@Nullable
 	public OffsetCommitCallback getCommitCallback() {
 		return this.commitCallback;
+	}
+
+	/**
+	 * Return the offset and metadata provider.
+	 * @return the offset and metadata provider.
+	 */
+	@Nullable
+	public OffsetAndMetadataProvider getOffsetAndMetadataProvider() {
+		return this.offsetAndMetadataProvider;
 	}
 
 	/**
@@ -356,35 +379,6 @@ public class ConsumerProperties {
 	/**
 	 * Get the authentication/authorization retry interval.
 	 * @return the interval.
-	 * @deprecated in favor of {@link #getAuthExceptionRetryInterval()}.
-	 */
-	@Deprecated
-	@Nullable
-	public Duration getAuthorizationExceptionRetryInterval() {
-		return this.authExceptionRetryInterval;
-	}
-
-	/**
-	 * Set the interval between retries after and
-	 * {@link org.apache.kafka.common.errors.AuthenticationException} or
-	 * {@code org.apache.kafka.common.errors.AuthorizationException} is thrown by
-	 * {@code KafkaConsumer}. By default the field is null and retries are disabled. In
-	 * such case the container will be stopped.
-	 *
-	 * The interval must be less than {@code max.poll.interval.ms} consumer property.
-	 *
-	 * @param authorizationExceptionRetryInterval the duration between retries
-	 * @since 2.3.5
-	 * @deprecated in favor of {@link #setAuthExceptionRetryInterval(Duration)}.
-	 */
-	@Deprecated
-	public void setAuthorizationExceptionRetryInterval(Duration authorizationExceptionRetryInterval) {
-		this.authExceptionRetryInterval = authorizationExceptionRetryInterval;
-	}
-
-	/**
-	 * Get the authentication/authorization retry interval.
-	 * @return the interval.
 	 */
 	@Nullable
 	public Duration getAuthExceptionRetryInterval() {
@@ -430,24 +424,6 @@ public class ConsumerProperties {
 	 */
 	public void setCommitRetries(int commitRetries) {
 		this.commitRetries = commitRetries;
-	}
-
-	@Deprecated
-	public boolean isOnlyLogRecordMetadata() {
-		return this.onlyLogRecordMetadata;
-	}
-
-	/**
-	 * Set to false to log {@code record.toString()} in log messages instead of
-	 * {@code topic-partition@offset}.
-	 * @param onlyLogRecordMetadata false to log the entire record.
-	 * @since 2.2.14
-	 * @deprecated in favor of
-	 * {@link KafkaUtils#setConsumerRecordFormatter(java.util.function.Function)}.
-	 */
-	@Deprecated
-	public void setOnlyLogRecordMetadata(boolean onlyLogRecordMetadata) {
-		this.onlyLogRecordMetadata = onlyLogRecordMetadata;
 	}
 
 	/**
@@ -541,6 +517,7 @@ public class ConsumerProperties {
 						? "\n consumerRebalanceListener=" + this.consumerRebalanceListener
 						: "")
 				+ (this.commitCallback != null ? "\n commitCallback=" + this.commitCallback : "")
+				+ (this.offsetAndMetadataProvider != null ? "\n offsetAndMetadataProvider=" + this.offsetAndMetadataProvider : "")
 				+ "\n syncCommits=" + this.syncCommits
 				+ (this.syncCommitTimeout != null ? "\n syncCommitTimeout=" + this.syncCommitTimeout : "")
 				+ (this.kafkaConsumerProperties.size() > 0 ? "\n properties=" + this.kafkaConsumerProperties : "")

@@ -77,7 +77,7 @@ public class MessagingMessageListenerAdapterTests {
 		assertThatExceptionOfType(ListenerExecutionFailedException.class).isThrownBy(() -> adapter.onMessage(
 						new ConsumerRecord<>("foo", 0, 0L, null, "foo"), null, null))
 				.withCauseExactlyInstanceOf(IllegalStateException.class)
-				.withMessageContaining("MANUAL");
+				.withStackTraceContaining("MANUAL");
 	}
 
 	public void test(Acknowledgment ack) {

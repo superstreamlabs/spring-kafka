@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2021 the original author or authors.
+ * Copyright 2018-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,6 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
-import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -37,6 +36,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -47,7 +47,6 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.Metric;
 import org.apache.kafka.common.MetricName;
-import org.apache.kafka.common.errors.ProducerFencedException;
 import org.apache.kafka.common.errors.UnknownProducerIdException;
 import org.apache.kafka.common.serialization.Serializer;
 import org.junit.jupiter.api.Test;
@@ -56,12 +55,10 @@ import org.mockito.InOrder;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.event.ContextStoppedEvent;
 import org.springframework.kafka.core.ProducerFactory.Listener;
-import org.springframework.kafka.support.TransactionSupport;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.springframework.kafka.transaction.KafkaTransactionManager;
 import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.util.concurrent.SettableListenableFuture;
 
 /**
  * @author Gary Russell
@@ -74,7 +71,7 @@ public class DefaultKafkaProducerFactoryTests {
 	@Test
 	void testProducerClosedAfterBadTransition() throws Exception {
 		final Producer producer = mock(Producer.class);
-		given(producer.send(any(), any())).willReturn(new SettableListenableFuture<>());
+		given(producer.send(any(), any())).willReturn(new CompletableFuture());
 		DefaultKafkaProducerFactory pf = new DefaultKafkaProducerFactory(new HashMap<>()) {
 
 			@Override
@@ -110,7 +107,7 @@ public class DefaultKafkaProducerFactoryTests {
 						return null;
 					});
 				})
-				.withMessageContaining("Invalid transition");
+				.withStackTraceContaining("Invalid transition");
 
 		assertThat(queue).hasSize(0);
 
@@ -289,29 +286,6 @@ public class DefaultKafkaProducerFactoryTests {
 
 	@Test
 	@SuppressWarnings({ "rawtypes", "unchecked" })
-	void testCleanUpAfterTxFence() {
-		final Producer producer = mock(Producer.class);
-		DefaultKafkaProducerFactory pf = new DefaultKafkaProducerFactory(new HashMap<>()) {
-
-			@Override
-			protected Producer createRawProducer(Map configs) {
-				return producer;
-			}
-
-		};
-		pf.setTransactionIdPrefix("tx.");
-		TransactionSupport.setTransactionIdSuffix("suffix");
-		Producer aProducer = pf.createProducer();
-		assertThat(KafkaTestUtils.getPropertyValue(pf, "consumerProducers", Map.class)).hasSize(1);
-		assertThat(aProducer).isNotNull();
-		willThrow(new ProducerFencedException("test")).given(producer).beginTransaction();
-		assertThatExceptionOfType(ProducerFencedException.class).isThrownBy(() -> aProducer.beginTransaction());
-		aProducer.close();
-		assertThat(KafkaTestUtils.getPropertyValue(pf, "consumerProducers", Map.class)).hasSize(0);
-	}
-
-	@Test
-	@SuppressWarnings({ "rawtypes", "unchecked" })
 	void testUnknownProducerIdException() {
 		final Producer producer1 = mock(Producer.class);
 		willAnswer(inv -> {
@@ -392,7 +366,6 @@ public class DefaultKafkaProducerFactoryTests {
 		assertThat(adds).hasSize(2);
 		assertThat(removals).hasSize(2);
 
-		TransactionSupport.setTransactionIdSuffix("xx");
 		pf.createProducer("tx").close();
 		assertThat(adds).hasSize(3);
 		assertThat(removals).hasSize(2);
@@ -403,7 +376,6 @@ public class DefaultKafkaProducerFactoryTests {
 		assertThat(adds).hasSize(3);
 		assertThat(removals).hasSize(3);
 
-		pf.setProducerPerConsumerPartition(false);
 		pf.createProducer("tx").close();
 		assertThat(adds).hasSize(4);
 		assertThat(removals).hasSize(3);
@@ -413,7 +385,6 @@ public class DefaultKafkaProducerFactoryTests {
 		pf.reset();
 		assertThat(adds).hasSize(4);
 		assertThat(removals).hasSize(4);
-		TransactionSupport.clearTransactionIdSuffix();
 
 		pf.setProducerPerThread(true);
 		pf.createProducer().close();

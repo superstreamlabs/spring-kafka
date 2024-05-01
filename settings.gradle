@@ -1,12 +1,13 @@
 pluginManagement {
 	repositories {
+		mavenCentral()
 		gradlePluginPortal()
 		maven { url 'https://repo.spring.io/plugins-release' }
 	}
 }
 
 plugins {
-	id 'com.gradle.enterprise' version '3.7.2'
+	id 'com.gradle.enterprise' version '3.11.1'
 	id "io.spring.ge.conventions" version "0.0.7"
 }
 
@@ -19,5 +20,6 @@ gradleEnterprise {
 rootProject.name = 'spring-kafka-dist'
 
 include 'spring-kafka'
+include 'spring-kafka-bom'
 include 'spring-kafka-test'
 include 'spring-kafka-docs'

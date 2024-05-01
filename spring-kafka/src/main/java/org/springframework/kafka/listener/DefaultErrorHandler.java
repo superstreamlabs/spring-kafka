@@ -16,13 +16,16 @@
 
 package org.springframework.kafka.listener;
 
+import java.util.Collection;
 import java.util.List;
 
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.SerializationException;
 
+import org.springframework.kafka.support.KafkaUtils;
 import org.springframework.lang.Nullable;
 import org.springframework.util.backoff.BackOff;
 
@@ -38,7 +41,7 @@ import org.springframework.util.backoff.BackOff;
  * not provided in the exception, error handling is delegated to a
  * {@link FallbackBatchErrorHandler} with this handler's {@link BackOff}. If the record is
  * recovered, its offset is committed. This is a replacement for the legacy
- * {@link SeekToCurrentErrorHandler} and {@link SeekToCurrentBatchErrorHandler} (but the
+ * {@code SeekToCurrentErrorHandler} and {@code SeekToCurrentBatchErrorHandler} (but the
  * fallback now can send the messages to a recoverer after retries are completed instead
  * of retrying indefinitely).
  *
@@ -86,11 +89,25 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 	 * @param backOff the {@link BackOff}.
 	 */
 	public DefaultErrorHandler(@Nullable ConsumerRecordRecoverer recoverer, BackOff backOff) {
-		super(recoverer, backOff, createFallback(backOff, recoverer));
+		this(recoverer, backOff, null);
+	}
+
+	/**
+	 * Construct an instance with the provided recoverer which will be called after the
+	 * backOff returns STOP for a topic/partition/offset.
+	 * @param recoverer the recoverer; if null, the default (logging) recoverer is used.
+	 * @param backOff the {@link BackOff}.
+	 * @param backOffHandler the {@link BackOffHandler}.
+	 * @since 2.9
+	 */
+	public DefaultErrorHandler(@Nullable ConsumerRecordRecoverer recoverer, BackOff backOff,
+			@Nullable BackOffHandler backOffHandler) {
+
+		super(recoverer, backOff, backOffHandler, createFallback(backOff, recoverer));
 	}
 
 	private static CommonErrorHandler createFallback(BackOff backOff, @Nullable ConsumerRecordRecoverer recoverer) {
-		return new ErrorHandlerAdapter(new FallbackBatchErrorHandler(backOff, recoverer));
+		return new FallbackBatchErrorHandler(backOff, recoverer);
 	}
 
 	/**
@@ -117,8 +134,14 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 	}
 
 	@Override
+	@Deprecated(since = "2.9", forRemoval = true) // in 3.1
 	public boolean remainingRecords() {
-		return true;
+		return isSeekAfterError();
+	}
+
+	@Override
+	public boolean seeksAfterHandling() {
+		return isSeekAfterError();
 	}
 
 	@Override
@@ -127,11 +150,29 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 	}
 
 	@Override
+	public boolean handleOne(Exception thrownException, ConsumerRecord<?, ?> record, Consumer<?, ?> consumer,
+			MessageListenerContainer container) {
+
+		try {
+			return getFailureTracker().recovered(record, thrownException, container, consumer);
+		}
+		catch (Exception ex) {
+			if (SeekUtils.isBackoffException(thrownException)) {
+				this.logger.debug(ex, "Failed to handle " + KafkaUtils.format(record) + " with " + thrownException);
+			}
+			else {
+				this.logger.error(ex, "Failed to handle " + KafkaUtils.format(record) + " with " + thrownException);
+			}
+			return false;
+		}
+	}
+
+	@Override
 	public void handleRemaining(Exception thrownException, List<ConsumerRecord<?, ?>> records,
 			Consumer<?, ?> consumer, MessageListenerContainer container) {
 
 		SeekUtils.seekOrRecover(thrownException, records, consumer, container, isCommitRecovered(), // NOSONAR
-				getRecoveryStrategy(records, consumer, thrownException), this.logger, getLogLevel());
+				getFailureTracker()::recovered, this.logger, getLogLevel());
 	}
 
 	@Override
@@ -139,6 +180,14 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 			MessageListenerContainer container, Runnable invokeListener) {
 
 		doHandle(thrownException, data, consumer, container, invokeListener);
+	}
+
+	@Override
+	public <K, V> ConsumerRecords<K, V> handleBatchAndReturnRemaining(Exception thrownException,
+			ConsumerRecords<?, ?> data, Consumer<?, ?> consumer, MessageListenerContainer container,
+			Runnable invokeListener) {
+
+		return handle(thrownException, data, consumer, container, invokeListener);
 	}
 
 	@Override
@@ -155,6 +204,13 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 					+ thrownException.getClass().getName()
 					+ "'s; no record information is available", thrownException);
 		}
+	}
+
+	@Override
+	public void onPartitionsAssigned(Consumer<?, ?> consumer, Collection<TopicPartition> partitions,
+			Runnable publishPause) {
+
+		getFallbackBatchHandler().onPartitionsAssigned(consumer, partitions, publishPause);
 	}
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2021 the original author or authors.
+ * Copyright 2016-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,12 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.kafka.test.assertj.KafkaConditions.key;
 import static org.springframework.kafka.test.assertj.KafkaConditions.keyValue;
 import static org.springframework.kafka.test.assertj.KafkaConditions.partition;
@@ -38,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -50,6 +56,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerInterceptor;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.Metric;
@@ -65,10 +72,16 @@ import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.InOrder;
+import org.mockito.Mockito;
 
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.kafka.support.CompositeProducerInterceptor;
 import org.springframework.kafka.support.CompositeProducerListener;
 import org.springframework.kafka.support.DefaultKafkaHeaderMapper;
 import org.springframework.kafka.support.KafkaHeaders;
@@ -83,9 +96,6 @@ import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.support.MessageBuilder;
-import org.springframework.util.concurrent.ListenableFuture;
-import org.springframework.util.concurrent.ListenableFutureCallback;
-import org.springframework.util.concurrent.SettableListenableFuture;
 
 /**
  * @author Gary Russell
@@ -94,6 +104,8 @@ import org.springframework.util.concurrent.SettableListenableFuture;
  * @author Biju Kunjummen
  * @author Endika Gutierrez
  * @author Thomas Strauß
+ * @author Soby Chacko
+ * @author Gurps Bassi
  */
 @EmbeddedKafka(topics = { KafkaTemplateTests.INT_KEY_TOPIC, KafkaTemplateTests.STRING_KEY_TOPIC })
 public class KafkaTemplateTests {
@@ -153,6 +165,12 @@ public class KafkaTemplateTests {
 
 		template.setDefaultTopic(INT_KEY_TOPIC);
 
+		template.setConsumerFactory(
+				new DefaultKafkaConsumerFactory<>(KafkaTestUtils.consumerProps("xx", "false", embeddedKafka)));
+		ConsumerRecords<Integer, String> initialRecords =
+				template.receive(Collections.singleton(new TopicPartitionOffset(INT_KEY_TOPIC, 1, 1L)));
+		assertThat(initialRecords).isEmpty();
+
 		template.sendDefault("foo");
 		assertThat(KafkaTestUtils.getSingleRecord(consumer, INT_KEY_TOPIC)).has(value("foo"));
 
@@ -170,15 +188,15 @@ public class KafkaTemplateTests {
 
 		template.send(MessageBuilder.withPayload("fiz")
 				.setHeader(KafkaHeaders.TOPIC, INT_KEY_TOPIC)
-				.setHeader(KafkaHeaders.PARTITION_ID, 0)
-				.setHeader(KafkaHeaders.MESSAGE_KEY, 2)
+				.setHeader(KafkaHeaders.PARTITION, 0)
+				.setHeader(KafkaHeaders.KEY, 2)
 				.build());
 		received = KafkaTestUtils.getSingleRecord(consumer, INT_KEY_TOPIC);
 		assertThat(received).has(allOf(keyValue(2, "fiz"), partition(0)));
 
 		template.send(MessageBuilder.withPayload("buz")
-				.setHeader(KafkaHeaders.PARTITION_ID, 1)
-				.setHeader(KafkaHeaders.MESSAGE_KEY, 2)
+				.setHeader(KafkaHeaders.PARTITION, 1)
+				.setHeader(KafkaHeaders.KEY, 2)
 				.build());
 		received = KafkaTestUtils.getSingleRecord(consumer, INT_KEY_TOPIC);
 		assertThat(received).has(allOf(keyValue(2, "buz"), partition(1)));
@@ -191,8 +209,7 @@ public class KafkaTemplateTests {
 		assertThat(partitions).isNotNull();
 		assertThat(partitions).hasSize(2);
 		assertThat(KafkaTestUtils.getPropertyValue(pf.createProducer(), "delegate")).isSameAs(wrapped.get());
-		template.setConsumerFactory(
-				new DefaultKafkaConsumerFactory<>(KafkaTestUtils.consumerProps("xx", "false", embeddedKafka)));
+
 		ConsumerRecord<Integer, String> receive = template.receive(INT_KEY_TOPIC, 1, received.offset());
 		assertThat(receive).has(allOf(keyValue(2, "buz"), partition(1)))
 				.extracting(ConsumerRecord::offset)
@@ -252,7 +269,7 @@ public class KafkaTemplateTests {
 
 		Message<String> message1 = MessageBuilder.withPayload("foo-message")
 				.setHeader(KafkaHeaders.TOPIC, INT_KEY_TOPIC)
-				.setHeader(KafkaHeaders.PARTITION_ID, 0)
+				.setHeader(KafkaHeaders.PARTITION, 0)
 				.setHeader("foo", "bar")
 				.setHeader(KafkaHeaders.RECEIVED_TOPIC, "dummy")
 				.build();
@@ -273,7 +290,7 @@ public class KafkaTemplateTests {
 
 		Message<String> message2 = MessageBuilder.withPayload("foo-message-2")
 				.setHeader(KafkaHeaders.TOPIC, INT_KEY_TOPIC)
-				.setHeader(KafkaHeaders.PARTITION_ID, 0)
+				.setHeader(KafkaHeaders.PARTITION, 0)
 				.setHeader(KafkaHeaders.TIMESTAMP, 1487694048615L)
 				.setHeader("foo", "bar")
 				.build();
@@ -382,22 +399,15 @@ public class KafkaTemplateTests {
 		DefaultKafkaProducerFactory<Integer, String> pf = new DefaultKafkaProducerFactory<>(senderProps);
 		KafkaTemplate<Integer, String> template = new KafkaTemplate<>(pf, true);
 		template.setDefaultTopic(INT_KEY_TOPIC);
-		ListenableFuture<SendResult<Integer, String>> future = template.sendDefault("foo");
+		CompletableFuture<SendResult<Integer, String>> future = template.sendDefault("foo");
 		template.flush();
 		final CountDownLatch latch = new CountDownLatch(1);
 		final AtomicReference<SendResult<Integer, String>> theResult = new AtomicReference<>();
-		future.addCallback(new ListenableFutureCallback<>() {
-
-			@Override
-			public void onSuccess(SendResult<Integer, String> result) {
+		future.whenComplete((result, ex) -> {
+			if (ex == null) {
 				theResult.set(result);
 				latch.countDown();
 			}
-
-			@Override
-			public void onFailure(Throwable ex) {
-			}
-
 		});
 		assertThat(KafkaTestUtils.getSingleRecord(consumer, INT_KEY_TOPIC)).has(value("foo"));
 		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
@@ -411,28 +421,21 @@ public class KafkaTemplateTests {
 		willAnswer(inv -> {
 			Callback callback = inv.getArgument(1);
 			callback.onCompletion(null, new RuntimeException("test"));
-			return new SettableListenableFuture<RecordMetadata>();
+			return new CompletableFuture<RecordMetadata>();
 		}).given(producer).send(any(), any());
 		ProducerFactory<Integer, String> pf = mock(ProducerFactory.class);
 		given(pf.createProducer()).willReturn(producer);
 		KafkaTemplate<Integer, String> template = new KafkaTemplate<>(pf);
-		ListenableFuture<SendResult<Integer, String>> future = template.send("foo", 1, "bar");
+		CompletableFuture<SendResult<Integer, String>> future = template.send("foo", 1, "bar");
 		final CountDownLatch latch = new CountDownLatch(1);
 		final AtomicReference<SendResult<Integer, String>> theResult = new AtomicReference<>();
 		AtomicReference<String> value = new AtomicReference<>();
-		future.addCallback(new KafkaSendCallback<>() {
-
-			@Override
-			public void onSuccess(SendResult<Integer, String> result) {
-			}
-
-			@Override
-			public void onFailure(KafkaProducerException ex) {
-				ProducerRecord<Integer, String> failed = ex.getFailedProducerRecord();
+		future.whenComplete((result, ex) -> {
+			if (ex != null) {
+				ProducerRecord<Integer, String> failed = ((KafkaProducerException) ex).getFailedProducerRecord();
 				value.set(failed.value());
 				latch.countDown();
 			}
-
 		});
 		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
 		assertThat(value.get()).isEqualTo("bar");
@@ -445,19 +448,21 @@ public class KafkaTemplateTests {
 		willAnswer(inv -> {
 			Callback callback = inv.getArgument(1);
 			callback.onCompletion(null, new RuntimeException("test"));
-			return new SettableListenableFuture<RecordMetadata>();
+			return new CompletableFuture<RecordMetadata>();
 		}).given(producer).send(any(), any());
 		ProducerFactory<Integer, String> pf = mock(ProducerFactory.class);
 		given(pf.createProducer()).willReturn(producer);
 		KafkaTemplate<Integer, String> template = new KafkaTemplate<>(pf);
-		ListenableFuture<SendResult<Integer, String>> future = template.send("foo", 1, "bar");
+		CompletableFuture<SendResult<Integer, String>> future = template.send("foo", 1, "bar");
 		final CountDownLatch latch = new CountDownLatch(1);
 		final AtomicReference<SendResult<Integer, String>> theResult = new AtomicReference<>();
 		AtomicReference<String> value = new AtomicReference<>();
-		future.addCallback(result -> { }, (KafkaFailureCallback<Integer, String>) ex -> {
-			ProducerRecord<Integer, String> failed = ex.getFailedProducerRecord();
-			value.set(failed.value());
-			latch.countDown();
+		future.whenComplete((record, ex) -> {
+			if (ex != null) {
+				ProducerRecord<Integer, String> failed = ((KafkaProducerException) ex).getFailedProducerRecord();
+				value.set(failed.value());
+				latch.countDown();
+			}
 		});
 		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
 		assertThat(value.get()).isEqualTo("bar");
@@ -489,7 +494,6 @@ public class KafkaTemplateTests {
 		Map<String, Object> senderProps = KafkaTestUtils.producerProps(embeddedKafka);
 		DefaultKafkaProducerFactory<String, String> pf = new DefaultKafkaProducerFactory<>(senderProps);
 		pf.setPhysicalCloseTimeout(6);
-		pf.setProducerPerConsumerPartition(false);
 		pf.setProducerPerThread(true);
 		pf.addPostProcessor(noopProducerPostProcessor);
 		pf.addListener(noopListener);
@@ -507,7 +511,6 @@ public class KafkaTemplateTests {
 		assertThat(template.getProducerFactory().getConfigurationProperties()
 				.get(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG)).isEqualTo(StringSerializer.class);
 		assertThat(template.getProducerFactory().getPhysicalCloseTimeout()).isEqualTo(Duration.ofSeconds(6));
-		assertThat(template.getProducerFactory().isProducerPerConsumerPartition()).isFalse();
 		assertThat(template.getProducerFactory().isProducerPerThread()).isTrue();
 		assertThat(template.isTransactional()).isTrue();
 		assertThat(template.getProducerFactory().getListeners()).isEqualTo(pf.getListeners());
@@ -553,5 +556,82 @@ public class KafkaTemplateTests {
 				.withCauseExactlyInstanceOf(TimeoutException.class);
 		pf.destroy();
 	}
+
+	@SuppressWarnings("unchecked")
+	@Test
+	void testProducerInterceptorManagedOnKafkaTemplate() {
+
+		Map<String, Object> senderProps = KafkaTestUtils.producerProps(embeddedKafka);
+		DefaultKafkaProducerFactory<Integer, String> pf = new DefaultKafkaProducerFactory<>(senderProps);
+		KafkaTemplate<Integer, String> template = new KafkaTemplate<>(pf, true);
+		ProducerInterceptor<Integer, String> producerInterceptor = Mockito.mock(ProducerInterceptor.class);
+		template.setProducerInterceptor(producerInterceptor);
+
+		template.setDefaultTopic("prod-interceptor-test-1");
+		template.sendDefault("foo");
+
+		verify(producerInterceptor, times(1)).onSend(any(ProducerRecord.class));
+		verify(producerInterceptor, times(1)).onAcknowledgement(any(RecordMetadata.class), Mockito.isNull());
+	}
+
+	@SuppressWarnings("unchecked")
+	@Test
+	void testProducerInterceptorNotSetOnKafkaTemplateNotInvoked() {
+
+		Map<String, Object> senderProps = KafkaTestUtils.producerProps(embeddedKafka);
+		DefaultKafkaProducerFactory<Integer, String> pf = new DefaultKafkaProducerFactory<>(senderProps);
+		KafkaTemplate<Integer, String> template = new KafkaTemplate<>(pf, true);
+		ProducerInterceptor<Integer, String> producerInterceptor = Mockito.mock(ProducerInterceptor.class);
+
+		template.setDefaultTopic("prod-interceptor-test-2");
+		template.sendDefault("foo");
+
+		verifyNoInteractions(producerInterceptor);
+	}
+
+	@SuppressWarnings("unchecked")
+	@Test
+	void testCompositeProducerInterceptor() {
+
+		Map<String, Object> senderProps = KafkaTestUtils.producerProps(embeddedKafka);
+		DefaultKafkaProducerFactory<Integer, String> pf = new DefaultKafkaProducerFactory<>(senderProps);
+		KafkaTemplate<Integer, String> template = new KafkaTemplate<>(pf, true);
+		ProducerInterceptor<Integer, String> producerInterceptor1 = Mockito.mock(ProducerInterceptor.class);
+		ProducerInterceptor<Integer, String> producerInterceptor2 = Mockito.mock(ProducerInterceptor.class);
+		CompositeProducerInterceptor<Integer, String> compositeProducerInterceptor =
+				new CompositeProducerInterceptor<>(producerInterceptor1, producerInterceptor2);
+		template.setProducerInterceptor(compositeProducerInterceptor);
+
+		ProducerRecord<Integer, String> mockProducerRecord = Mockito.mock(ProducerRecord.class);
+		doReturn(mockProducerRecord).when(producerInterceptor1).onSend(any(ProducerRecord.class));
+
+		template.setDefaultTopic("prod-interceptor-test-3");
+		template.sendDefault("foo");
+
+		InOrder inOrder = inOrder(producerInterceptor1, producerInterceptor2);
+
+		inOrder.verify(producerInterceptor1).onSend(any(ProducerRecord.class));
+		inOrder.verify(producerInterceptor2).onSend(any(ProducerRecord.class));
+		inOrder.verify(producerInterceptor1).onAcknowledgement(any(RecordMetadata.class), Mockito.isNull());
+		inOrder.verify(producerInterceptor2).onAcknowledgement(any(RecordMetadata.class), Mockito.isNull());
+	}
+
+	@ParameterizedTest(name = "{0} is invalid")
+	@NullSource
+	@ValueSource(longs =  -1)
+	void testReceiveWhenOffsetIsInvalid(Long offset) {
+		Map<String, Object> senderProps = KafkaTestUtils.producerProps(embeddedKafka);
+		DefaultKafkaProducerFactory<Integer, String> pf = new DefaultKafkaProducerFactory<>(senderProps);
+		KafkaTemplate<Integer, String> template = new KafkaTemplate<>(pf, true);
+
+		template.setConsumerFactory(
+				new DefaultKafkaConsumerFactory<>(KafkaTestUtils.consumerProps("xx", "false", embeddedKafka)));
+		TopicPartitionOffset tpoWithNullOffset = new TopicPartitionOffset(INT_KEY_TOPIC, 1, offset);
+
+		assertThatExceptionOfType(KafkaException.class)
+				.isThrownBy(() -> template.receive(Collections.singleton(tpoWithNullOffset)))
+				.withMessage("Offset supplied in TopicPartitionOffset is invalid: " + tpoWithNullOffset);
+	}
+
 
 }

@@ -41,7 +41,7 @@ import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscription;
 
 import org.springframework.core.log.LogAccessor;
-import org.springframework.kafka.listener.ListenerUtils;
+import org.springframework.kafka.support.KafkaUtils;
 import org.springframework.kafka.support.converter.MessagingMessageConverter;
 import org.springframework.kafka.test.condition.EmbeddedKafkaCondition;
 import org.springframework.kafka.test.condition.LogLevels;
@@ -269,7 +269,7 @@ public class ReactiveKafkaProducerTemplateTransactionIntegrationTests {
 				.onErrorResume(error -> reactiveKafkaProducerTemplate.transactionManager()
 						.abort()
 						.then(Mono.error(error))))
-				.expectErrorMatches(throwable -> throwable instanceof KafkaException &&
+				.expectErrorMatches(throwable -> throwable instanceof IllegalStateException &&
 						throwable.getMessage().equals("TransactionalId reactive.transaction: Invalid transition " +
 								"attempted from state READY to state ABORTING_TRANSACTION"))
 				.verify(DEFAULT_VERIFY_TIMEOUT);
@@ -281,7 +281,6 @@ public class ReactiveKafkaProducerTemplateTransactionIntegrationTests {
 				.verify(DEFAULT_VERIFY_TIMEOUT);
 	}
 
-	@SuppressWarnings("deprecation")
 	@LogLevels(categories = "reactor.kafka.receiver.internals.ConsumerEventLoop", level = "TRACE",
 			classes = { JUnitUtils.class, LogLevelsCondition.class,
 					DefaultKafkaSender.class,
@@ -312,7 +311,7 @@ public class ReactiveKafkaProducerTemplateTransactionIntegrationTests {
 				reactiveKafkaConsumerTemplate
 						.receive().doOnNext(receiverRecord -> receiverRecord.receiverOffset().acknowledge()))
 				.assertNext(receiverRecord -> {
-					logger.info(ListenerUtils.recordToString(receiverRecord, true));
+					logger.info(KafkaUtils.format(receiverRecord));
 					assertThat(receiverRecord.value()).startsWith(DEFAULT_VALUE + "xyz");
 					assertThat(receiverRecord.offset()).isGreaterThan(0);
 				})
@@ -344,9 +343,8 @@ public class ReactiveKafkaProducerTemplateTransactionIntegrationTests {
 		throw new KafkaException();
 	}
 
-	@SuppressWarnings("deprecation")
 	private SenderRecord<Integer, String, Integer> toSenderRecord(ConsumerRecord<Integer, String> record) {
-		logger.info(ListenerUtils.recordToString(record, true));
+		logger.info(KafkaUtils.format(record));
 		return SenderRecord.create(REACTIVE_INT_KEY_TOPIC, record.partition(), null, record.key(),
 				record.value() + "xyz", record.key());
 	}

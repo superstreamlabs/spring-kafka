@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2021 the original author or authors.
+ * Copyright 2016-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -82,7 +82,9 @@ public interface ProducerFactory<K, V> {
 	 * Remove the specified producer from the cache and close it.
 	 * @param transactionIdSuffix the producer's transaction id suffix.
 	 * @since 1.3.8
+	 * @deprecated - no longer needed.
 	 */
+	@Deprecated(since = "3.0", forRemoval = true) // in 3.1
 	default void closeProducerFor(String transactionIdSuffix) {
 	}
 
@@ -90,7 +92,11 @@ public interface ProducerFactory<K, V> {
 	 * Return the producerPerConsumerPartition.
 	 * @return the producerPerConsumerPartition.
 	 * @since 1.3.8
+	 * @deprecated no longer necessary because
+	 * {@code org.springframework.kafka.listener.ContainerProperties.EOSMode#V1} is no
+	 * longer supported.
 	 */
+	@Deprecated(since = "3.0", forRemoval = true) // in 3.1
 	default boolean isProducerPerConsumerPartition() {
 		return false;
 	}
