@@ -147,6 +147,9 @@ configure(javaProjects) { subproject ->
   if (shouldPublish) {
     apply plugin: 'maven-publish'
     apply plugin: 'signing'
+    tasks.register('install').configure { dependsOn(publishToMavenLocal) }
+    tasks.register('uploadArchives').configure { dependsOn(publish) }	
+  }
 
 	java {
 		withJavadocJar()
