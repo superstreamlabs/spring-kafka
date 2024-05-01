@@ -210,21 +210,17 @@ configure(javaProjects) { subproject ->
         // To test locally, invoke gradlew with `-PmavenUrl=file:///some/local/path`
         maven {
           url = mavenUrl
-          // credentials {
-          //   username = mavenUsername
-          //   password = mavenPassword
-          // }
         }
       }
 
-	publishing {
-		publications {
-			mavenJava(MavenPublication) {
-				suppressAllPomMetadataWarnings()
-				from components.java
+		publishing {
+			publications {
+				mavenJava(MavenPublication) {
+					suppressAllPomMetadataWarnings()
+					from components.java
+				}
 			}
 		}
-	}
 	}
     if (shouldSign) {
       signing {

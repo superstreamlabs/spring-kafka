@@ -47,7 +47,7 @@ pipeline {
         }
         stage('Prod Release') {
             when {
-                branch '3.5.1'
+                branch '3.1.2'
             }            
             steps {
                 script {
@@ -62,7 +62,7 @@ pipeline {
         }
         stage('Create Release'){
             when {
-                branch '3.5.1'
+                branch '3.1.2'
             }       
             steps {               
                 sh """
@@ -71,11 +71,19 @@ pipeline {
                     mv gh_2.40.0_linux_amd64/bin/gh /usr/local/bin 
                     rm -rf gh_2.40.0_linux_amd64 gh.tar.gz
                 """
+                withCredentials([sshUserPrivateKey(keyFileVariable:'check',credentialsId: 'main-github')]) {
+                sh """
+                GIT_SSH_COMMAND='ssh -i $check -o StrictHostKeyChecking=no' git config --global user.email "jenkins@memphis.dev"
+                GIT_SSH_COMMAND='ssh -i $check -o StrictHostKeyChecking=no' git config --global user.name "Jenkins"                
+                GIT_SSH_COMMAND='ssh -i $check -o StrictHostKeyChecking=no' git tag -a $versionTag -m "$versionTag"
+                GIT_SSH_COMMAND='ssh -i $check -o StrictHostKeyChecking=no' git push origin $versionTag
+                """
+                }                
                 withCredentials([string(credentialsId: 'gh_token', variable: 'GH_TOKEN')]) {
                 sh """
-                gh release create $versionTag --generate-notes
+                gh release create $versionTag /tmp/kafka-clients/kafka-client-${env.versionTag}.tar.gz --generate-notes
                 """
-                }
+                }                
             }
         }                              
     }
@@ -113,11 +121,11 @@ def publishClients() {
 def uploadBundleAndCheckStatus() {
     def response = sh(script: """
         cd /tmp/kafka-clients
-        tar czvf ai.tar.gz ai
+        tar czvf spring-kafka-clients-${env.versionTag}.tar.gz ai
         curl --request POST \\
              --verbose \\
              --header 'Authorization: Bearer ${env.TOKEN}' \\
-             --form bundle=@ai.tar.gz \\
+             --form bundle=@spring-kafka-clients-${env.versionTag}.tar.gz \\
              'https://central.sonatype.com/api/v1/publisher/upload?name=spring-kafka-clients-${env.versionTag}'
     """, returnStdout: true).trim()
     def id = response.split("\n").last().trim()
