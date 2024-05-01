@@ -379,6 +379,8 @@ project ('spring-kafka') {
 		api 'io.micrometer:micrometer-observation'
 		optionalApi 'io.micrometer:micrometer-tracing'
 
+        implementation 'ai.superstream:superstream-java:1.0.0'
+
 		testImplementation project (':spring-kafka-test')
 		testImplementation 'io.projectreactor:reactor-test'
 		testImplementation "org.mockito:mockito-junit-jupiter:$mockitoVersion"
