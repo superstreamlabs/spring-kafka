@@ -64,6 +64,7 @@ ext {
 	junit4Version = '4.13.2'
 	junitJupiterVersion = '5.8.2'
 	kafkaVersion = '3.0.1'
+	superstreamVersion = '3.0.1'
 	log4jVersion = '2.17.2'
 	micrometerVersion = '1.8.4'
 	mockitoVersion = '4.0.0'
@@ -345,7 +346,7 @@ project ('spring-kafka') {
 		api ("org.springframework.retry:spring-retry:$springRetryVersion") {
 			exclude group: 'org.springframework'
 		}
-		api "org.apache.kafka:kafka-clients:$kafkaVersion"
+		api "ai.superstream:kafka-clients:$superstreamVersion"
 		optionalApi "org.apache.kafka:kafka-streams:$kafkaVersion"
 
 		optionalApi 'com.fasterxml.jackson.core:jackson-core'
