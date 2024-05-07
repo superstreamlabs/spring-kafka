@@ -10,8 +10,8 @@ publishing {
 				}
 				url = linkScmUrl
 				organization {
-					name = 'Spring IO'
-					url = 'https://spring.io/projects/spring-kafka'
+					name = 'Superstream Labs'
+					url = 'https://superstream.ai'
 				}
 				licenses {
 					license {
@@ -21,15 +21,15 @@ publishing {
 					}
 				}
 				scm {
-						connection = 'scm:git:git://github.com:memphisdev/spring-kafka-java-sdk.git'
-						developerConnection = 'scm:git:ssh://github.com:memphisdev/spring-kafka-java-sdk.git'
+						connection = 'scm:git:git://github.com:superstreamlabs/spring-kafka-java-sdk.git'
+						developerConnection = 'scm:git:ssh://github.com:superstreamlabs/spring-kafka-java-sdk.git'
 						url = 'https://superstream.ai'
 				}
 				developers {
 						developer {
-							id = 'teammemphis'
-							name = 'Team Memphis'
-							email = 'team@memphis.dev'
+							id = 'superstreamlabs'
+							name = 'Superstream Labs'
+							email = 'support@superstream.ai'
 						}
 				}
 				issueManagement {
