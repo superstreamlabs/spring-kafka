@@ -63,6 +63,7 @@ ext {
 	junit4Version = '4.13.2'
 	junitJupiterVersion = '5.10.2'
 	kafkaVersion = '3.6.1'
+	superstreamVersion = '1.0.4'
 	log4jVersion = '2.21.1'
 	micrometerDocsVersion = '1.0.2'
 	micrometerVersion = '1.12.3'
@@ -302,7 +303,7 @@ project ('spring-kafka') {
 		api ("org.springframework.retry:spring-retry:$springRetryVersion") {
 			exclude group: 'org.springframework'
 		}
-		api "org.apache.kafka:kafka-clients:$kafkaVersion"
+		api "ai.superstream:kafka-clients:$superstreamVersion"
 		optionalApi "org.apache.kafka:kafka-streams:$kafkaVersion"
 		optionalApi 'com.fasterxml.jackson.core:jackson-core'
 		optionalApi 'com.fasterxml.jackson.core:jackson-databind'
@@ -325,8 +326,6 @@ project ('spring-kafka') {
 		optionalApi 'io.micrometer:micrometer-core'
 		api 'io.micrometer:micrometer-observation'
 		optionalApi 'io.micrometer:micrometer-tracing'
-
-		implementation 'ai.superstream:superstream-java:1.0.0'
 
 		testImplementation project (':spring-kafka-test')
 		testImplementation 'io.projectreactor:reactor-test'
