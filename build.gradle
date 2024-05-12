@@ -368,8 +368,6 @@ project ('spring-kafka') {
 		optionalApi 'io.projectreactor.kafka:reactor-kafka'
 		optionalApi "io.micrometer:micrometer-core:$micrometerVersion"
 
-        implementation "ai.superstream:kafka-clients:$superstreamVersion"
-
 		testImplementation project (':spring-kafka-test')
 		testImplementation 'io.projectreactor:reactor-test'
 		testImplementation "org.mockito:mockito-junit-jupiter:$mockitoVersion"
